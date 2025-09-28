@@ -1,0 +1,21 @@
+{
+  "mode": "simulate",
+  "rpc": {
+    "commitment": "processed"
+  },
+  "trading": {
+    "watchWallets": [
+      "GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN"
+    ],
+    "copyAmountSol": 0.01,
+    "minTradeAmountSol": 0.005,
+    "slippageBps": 500,
+    "priorityFee": {
+      "unitLimit": 250000,
+      "unitPrice": 250000
+    }
+  },
+  "logging": {
+    "logFile": "pump_fun_swaps.json"
+  }
+}

@@ -8,12 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "script:listen-create-buy": "tsx scripts/listen-create-buy.ts",
-    "script:listen-find-buy": "tsx scripts/listen-find-buy.ts"
+    "script:listen-find-buy": "tsx scripts/listen-find-buy.ts",
+    "script:test-detector": "tsx scripts/test-detector.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
     "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
+    "config": "^4.1.1",
     "dotenv": "^17.2.2",
     "helius-laserstream": "^0.2.0",
     "next": "15.5.4",
