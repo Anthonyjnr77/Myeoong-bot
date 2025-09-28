@@ -1,0 +1,2 @@
+# sol-copytrader
+Solana Copytrader
