@@ -1,5 +1,6 @@
 import config from 'config';
-import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { PublicKey, LAMPORTS_PER_SOL, Keypair } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 // Domain-specific constants from QuickNode (pump.fun knowledge)
 export const PUMP_FUN_CONSTANTS = {
@@ -42,7 +43,10 @@ interface CopyTradingConfig {
     };
   };
   wallet: {
-    privateKey: string;
+    privateKey: string;      // Bot wallet (executes copies)
+  };
+  testing: {
+    sourceWalletPrivateKey: string;  // Source wallet (for tests only)
   };
   logging: {
     logFile: string;
@@ -65,21 +69,35 @@ class ConfigValidator {
   }
 
   private static validateEnvironment(): void {
-    const required = ['HELIUS_API_KEY', 'HELIUS_RPC_ENDPOINT', 'LASERSTREAM_ENDPOINT', 'PRIVATE_KEY'];
+    const required = ['HELIUS_API_KEY', 'HELIUS_RPC_ENDPOINT', 'LASERSTREAM_ENDPOINT', 'BOT_WALLET_PRIVATE_KEY'];
     const missing = required.filter(key => !process.env[key]);
     
     if (missing.length > 0) {
       throw new Error(`Missing environment variables: ${missing.join(', ')}`);
     }
 
-    // Validate private key format (should be base58)
+    // Validate bot private key format (should be base58)
     try {
-      const privateKey = process.env.PRIVATE_KEY!;
+      const privateKey = process.env.BOT_WALLET_PRIVATE_KEY!;
       if (privateKey.length < 32) {
-        throw new Error('Private key appears to be too short');
+        throw new Error('Bot wallet private key appears to be too short');
       }
+      bs58.decode(privateKey); // Test decode
     } catch {
-      throw new Error('Invalid private key format - should be base58 encoded');
+      throw new Error('Invalid bot wallet private key format - should be base58 encoded');
+    }
+
+    // Validate source private key if provided (optional for production)
+    if (process.env.SOURCE_WALLET_PRIVATE_KEY) {
+      try {
+        const sourceKey = process.env.SOURCE_WALLET_PRIVATE_KEY;
+        if (sourceKey.length < 32) {
+          throw new Error('Source wallet private key appears to be too short');
+        }
+        bs58.decode(sourceKey);
+      } catch {
+        throw new Error('Invalid source wallet private key format - should be base58 encoded');
+      }
     }
   }
 
@@ -93,7 +111,7 @@ class ConfigValidator {
     }
 
     if (trading.copyAmountSol < trading.minTradeAmountSol) {
-      console.warn('⚠️  Copy amount is less than minimum trade amount - no trades will be copied');
+      console.warn('WARNING: Copy amount is less than minimum trade amount - no trades will be copied');
     }
 
     if (trading.slippageBps < 0 || trading.slippageBps > 10000) {
@@ -116,7 +134,10 @@ class ConfigValidator {
       },
       trading: config.get('trading'),
       wallet: {
-        privateKey: process.env.PRIVATE_KEY!
+        privateKey: process.env.BOT_WALLET_PRIVATE_KEY!
+      },
+      testing: {
+        sourceWalletPrivateKey: process.env.SOURCE_WALLET_PRIVATE_KEY || ''
       },
       logging: config.get('logging')
     };
@@ -126,13 +147,16 @@ class ConfigValidator {
     this.validateTradingParams(cfg.trading);
 
     // Log configuration summary
-    console.log(`🔧 Config loaded: ${cfg.mode} mode`);
-    console.log(`📊 Watching ${cfg.trading.watchWallets.length} wallets:`);
+    const botKeypair = Keypair.fromSecretKey(bs58.decode(cfg.wallet.privateKey));
+    
+    console.log(`Config loaded: ${cfg.mode} mode`);
+    console.log(`Watching ${cfg.trading.watchWallets.length} wallets:`);
     cfg.trading.watchWallets.forEach(wallet => 
       console.log(`   - ${wallet.substring(0, 4)}...${wallet.slice(-4)}`)
     );
-    console.log(`💰 Copy amount: ${cfg.trading.copyAmountSol} SOL`);
-    console.log(`🎯 Min trade size: ${cfg.trading.minTradeAmountSol} SOL`);
+    console.log(`Bot wallet: ${botKeypair.publicKey.toBase58().substring(0, 4)}...${botKeypair.publicKey.toBase58().slice(-4)}`);
+    console.log(`Copy amount: ${cfg.trading.copyAmountSol} SOL`);
+    console.log(`Min trade size: ${cfg.trading.minTradeAmountSol} SOL`);
     
     return cfg;
   }

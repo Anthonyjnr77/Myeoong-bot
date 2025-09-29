@@ -1,5 +1,5 @@
 {
-  "mode": "simulate",
+  "mode": "live",
   "rpc": {
     "commitment": "processed"
   },

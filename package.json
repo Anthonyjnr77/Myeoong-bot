@@ -9,7 +9,9 @@
     "lint": "eslint",
     "script:listen-create-buy": "tsx scripts/listen-create-buy.ts",
     "script:listen-find-buy": "tsx scripts/listen-find-buy.ts",
-    "script:test-detector": "tsx scripts/test-detector.ts"
+    "script:test-detector": "tsx scripts/test-detector.ts",
+    "script:test-parser": "tsx scripts/test-parser.ts",
+    "script:test-builder": "tsx scripts/test-builder.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
