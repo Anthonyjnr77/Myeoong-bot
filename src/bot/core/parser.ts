@@ -34,16 +34,14 @@ export class TradeParser {
       // Find BUY or SELL instruction by discriminator
       for (const instruction of pumpFunInstructions) {
         if (!instruction.data || instruction.data.length < 24) {
-          continue; // Need at least discriminator (8) + amounts (16)
+          continue;
         }
 
-        // Extract discriminator (first 8 bytes)
         const discriminator = instruction.data.slice(0, 8);
         const buyDiscriminator = Array.from(PUMP_FUN_CONSTANTS.BUY_DISCRIMINATOR);
         const sellDiscriminator = Array.from(PUMP_FUN_CONSTANTS.SELL_DISCRIMINATOR);
         const instructionDiscriminator = Array.from(discriminator);
 
-        // Check if this is a BUY or SELL
         const isBuy = buyDiscriminator.every((byte, i) => byte === instructionDiscriminator[i]);
         const isSell = sellDiscriminator.every((byte, i) => byte === instructionDiscriminator[i]);
 
@@ -51,16 +49,13 @@ export class TradeParser {
           continue;
         }
 
-        // CRITICAL: instruction.accounts is a Buffer, must convert to Array
         const accountIndices = Array.from(instruction.accounts);
         
-        // Extract target accounts using validated indices
         const targetAccounts = PUMP_FUN_CONSTANTS.TARGET_ACCOUNTS[isBuy ? 'BUY' : 'SELL'];
-        const mintAccountIndex = accountIndices[targetAccounts[0].index]; // index 2
-        const userAccountIndex = accountIndices[targetAccounts[1].index]; // index 6
+        const mintAccountIndex = accountIndices[targetAccounts[0].index];
+        const userAccountIndex = accountIndices[targetAccounts[1].index];
 
         if (mintAccountIndex === undefined || userAccountIndex === undefined) {
-          console.warn(`Missing account indices in instruction`);
           continue;
         }
 
@@ -68,28 +63,23 @@ export class TradeParser {
         const user = transaction.accountKeys[userAccountIndex];
 
         if (!mint || !user) {
-          console.warn(`Could not resolve mint or user from account keys`);
           continue;
         }
 
-        // Watchlist check - early exit if not in watchlist
+        // Watchlist check
         if (!appConfig.trading.watchWallets.includes(user)) {
-          console.log(`Ignoring trade from non-watchlist wallet: ${user.substring(0, 8)}...`);
           return null;
         }
 
-        // Parse amounts using validated parseU64 function
         const tokenAmount = this.parseU64(instruction.data, 8);
         const solAmount = this.parseU64(instruction.data, 16);
 
         // Minimum trade amount check
         if (!TRADING_UTILS.meetsMinimumTrade(solAmount, appConfig.trading.minTradeAmountSol)) {
-          console.log(`Trade below minimum: ${TRADING_UTILS.formatAmount(solAmount)} < ${appConfig.trading.minTradeAmountSol} SOL`);
           return null;
         }
 
-        // Successfully parsed trade
-        const parsedTrade: ParsedTrade = {
+        return {
           type: isBuy ? 'BUY' : 'SELL',
           mint,
           user,
@@ -99,17 +89,9 @@ export class TradeParser {
           slot: transaction.slot,
           timestamp: transaction.timestamp
         };
-
-        console.log(`✅ Parsed ${parsedTrade.type} trade:`);
-        console.log(`   Mint: ${mint}`);
-        console.log(`   User: ${user.substring(0, 8)}...${user.slice(-4)}`);
-        console.log(`   Token Amount: ${tokenAmount}`);
-        console.log(`   SOL Amount: ${TRADING_UTILS.formatAmount(solAmount)}`);
-
-        return parsedTrade;
       }
 
-      return null; // No valid BUY/SELL instruction found
+      return null;
 
     } catch (error) {
       console.error(`Parser error for ${transaction.signature}:`, error);
@@ -119,11 +101,10 @@ export class TradeParser {
 
   /**
    * Parse unsigned 64-bit integer from buffer (little-endian)
-   * Validated via test-detector.ts output
    */
   private parseU64(data: Uint8Array, offset: number): number {
     const slice = data.slice(offset, offset + 8);
     const dataView = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
-    return Number(dataView.getBigUint64(0, true)); // true = little-endian
+    return Number(dataView.getBigUint64(0, true));
   }
 }

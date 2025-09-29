@@ -36,3 +36,6 @@ yarn-error.log*
 
 # Dependencies
 node_modules/
+
+# Claude Code configuration
+CLAUDE.md
