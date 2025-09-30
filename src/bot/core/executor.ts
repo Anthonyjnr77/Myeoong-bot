@@ -31,6 +31,7 @@ export interface ExecutionResult {
 export interface ExecutionOptions {
   skipPreflight?: boolean;
   maxRetries?: number;
+  blockhash?: string;  // Accept blockhash from builder
 }
 
 const DEFAULT_OPTIONS: ExecutionOptions = {
@@ -94,10 +95,17 @@ export class TransactionExecutor {
         ...transaction.instructions,
       ];
 
-      const { blockhash } = await this.connection.getLatestBlockhash(
-        appConfig.rpc.commitment
-      );
-      transaction.recentBlockhash = blockhash;
+      // Use provided blockhash if available, otherwise fetch new one
+      if (!options.blockhash && !transaction.recentBlockhash) {
+        const { blockhash } = await this.connection.getLatestBlockhash(
+          appConfig.rpc.commitment
+        );
+        transaction.recentBlockhash = blockhash;
+      } else if (options.blockhash) {
+        transaction.recentBlockhash = options.blockhash;
+      }
+      // If transaction already has blockhash, keep it
+
       transaction.feePayer = signer.publicKey;
 
       latency.preparation = Date.now() - prepStart;
@@ -184,13 +192,22 @@ export class TransactionExecutor {
       ];
       timing.computeBudget = Date.now() - t1;
 
+      // Use provided blockhash if available, otherwise fetch new one
       const t2 = Date.now();
-      const { blockhash } = await this.connection.getLatestBlockhash(
-        appConfig.rpc.commitment
-      );
-      transaction.recentBlockhash = blockhash;
+      if (!options.blockhash && !transaction.recentBlockhash) {
+        const { blockhash } = await this.connection.getLatestBlockhash(
+          appConfig.rpc.commitment
+        );
+        transaction.recentBlockhash = blockhash;
+        timing.blockhashFetch = Date.now() - t2;
+      } else if (options.blockhash) {
+        transaction.recentBlockhash = options.blockhash;
+        timing.blockhashFetch = 0;  // No fetch needed
+      } else {
+        timing.blockhashFetch = 0;  // Already had blockhash
+      }
+
       transaction.feePayer = signer.publicKey;
-      timing.blockhashFetch = Date.now() - t2;
 
       const t3 = Date.now();
       transaction.sign(signer);

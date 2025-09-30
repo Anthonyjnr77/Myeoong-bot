@@ -10,6 +10,7 @@ import {
 import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
 import { 
   getAssociatedTokenAddress,
+  createAssociatedTokenAccountIdempotentInstruction,
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID
 } from '@solana/spl-token';
@@ -24,12 +25,13 @@ export interface BuildResult {
   transaction?: Transaction;
   error?: string;
   buildTimestamp: number;
+  blockhash?: string;
   metadata?: {
     mint: string;
     amount: string;
   };
   timing?: {
-    fetchAccounts: number;
+    parallelFetch: number;
     calculateAmount: number;
     buildInstructions: number;
     total: number;
@@ -40,6 +42,12 @@ export class DirectCallBuilder {
   private connection: Connection;
   private botKeypair: Keypair;
   private sdk: PumpFunSDK;
+  
+  // Cached config
+  private globalAccount: any = null;
+  private feeConfig: any = null;
+  private cacheInitialized: boolean = false;
+  private refreshInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.connection = new Connection(appConfig.rpc.endpoint, {
@@ -59,10 +67,58 @@ export class DirectCallBuilder {
     this.sdk = new PumpFunSDK(provider);
   }
 
+  async initialize(): Promise<void> {
+    console.log('Initializing config cache...');
+    
+    // Fetch global account and fee config in parallel
+    const [globalAccount, feeConfig] = await Promise.all([
+      this.sdk.token.getGlobalAccount(appConfig.rpc.commitment),
+      this.sdk.token.getFeeConfig(appConfig.rpc.commitment)
+    ]);
+
+    this.globalAccount = globalAccount;
+    this.feeConfig = feeConfig;
+    this.cacheInitialized = true;
+
+    console.log('Config cache initialized');
+
+    // Refresh cache every 10 minutes
+    this.refreshInterval = setInterval(() => {
+      this.refreshCache();
+    }, 10 * 60 * 1000);
+  }
+
+  private async refreshCache(): Promise<void> {
+    try {
+      const [globalAccount, feeConfig] = await Promise.all([
+        this.sdk.token.getGlobalAccount(appConfig.rpc.commitment),
+        this.sdk.token.getFeeConfig(appConfig.rpc.commitment)
+      ]);
+
+      this.globalAccount = globalAccount;
+      this.feeConfig = feeConfig;
+      
+      console.log('Config cache refreshed');
+    } catch (error) {
+      console.error('Failed to refresh config cache:', error);
+    }
+  }
+
+  cleanup(): void {
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+  }
+
   async buildTransaction(parsedTrade: ParsedTrade): Promise<BuildResult> {
     const buildTimestamp = Date.now();
 
     try {
+      if (!this.cacheInitialized) {
+        throw new Error('Builder not initialized. Call initialize() first.');
+      }
+
       if (parsedTrade.type !== 'BUY') {
         return {
           success: false,
@@ -77,23 +133,87 @@ export class DirectCallBuilder {
       );
       const slippageBasisPoints = BigInt(appConfig.trading.slippageBps);
 
-      // This replicates getBuyInstructionsBySolAmount exactly
-      const transaction = await this.sdk.trade.getBuyInstructionsBySolAmount(
-        this.botKeypair.publicKey,
+      const bondingCurvePDA = this.sdk.pda.getBondingCurvePDA(mint);
+
+      // Parallel fetch: bonding curve + blockhash (NO creator fetch!)
+      const [bondingCurveAccount, { blockhash }] = await Promise.all([
+        this.sdk.token.getBondingCurveAccount(mint, appConfig.rpc.commitment),
+        this.connection.getLatestBlockhash(appConfig.rpc.commitment)
+      ]);
+      
+      if (!bondingCurveAccount) {
+        throw new Error(`Bonding curve account not found: ${mint.toBase58()}`);
+      }
+
+      // Extract creator directly from bonding curve - no extra RPC call!
+      const bondingCreator = new PublicKey(bondingCurveAccount.creator);
+
+      // Calculate using cached config
+      const buyAmount = bondingCurveAccount.getBuyPrice(
+        this.globalAccount,
+        this.feeConfig,
+        buyAmountSol
+      );
+      const buyAmountWithSlippage = buyAmountSol + (buyAmountSol * slippageBasisPoints / 10000n);
+
+      // Build transaction
+      const transaction = new Transaction();
+      
+      const bondingCurve = bondingCurvePDA;
+      const associatedBonding = await getAssociatedTokenAddress(
         mint,
-        buyAmountSol,
-        slippageBasisPoints,
-        appConfig.rpc.commitment
+        bondingCurve,
+        true
       );
 
-      // Executor will fetch blockhash and set fee payer
-      // Just set fee payer here
+      // Use idempotent ATA creation (no existence check needed)
+      const associatedUser = await getAssociatedTokenAddress(
+        mint,
+        this.botKeypair.publicKey
+      );
+
+      transaction.add(
+        createAssociatedTokenAccountIdempotentInstruction(
+          this.botKeypair.publicKey,
+          associatedUser,
+          this.botKeypair.publicKey,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+
+      const globalAccountPDA = this.sdk.pda.getGlobalAccountPda();
+      const creatorVault = this.sdk.pda.getCreatorVaultPda(bondingCreator);
+      const eventAuthority = this.sdk.pda.getEventAuthorityPda();
+
+      const ix = await this.sdk.program.methods
+        .buy(new BN(buyAmount.toString()), new BN(buyAmountWithSlippage.toString()))
+        .accounts({
+          global: globalAccountPDA,
+          feeRecipient: this.globalAccount.feeRecipient,
+          mint,
+          bondingCurve,
+          associatedBondingCurve: associatedBonding,
+          associatedUser,
+          user: this.botKeypair.publicKey,
+          creatorVault,
+          eventAuthority,
+          globalVolumeAccumulator: this.sdk.pda.getGlobalVolumeAccumulatorPda(),
+          userVolumeAccumulator: this.sdk.pda.getUserVolumeAccumulatorPda(this.botKeypair.publicKey),
+          feeConfig: this.sdk.pda.getPumpFeeConfigPda(),
+        })
+        .instruction();
+
+      transaction.add(ix);
+      transaction.recentBlockhash = blockhash;
       transaction.feePayer = this.botKeypair.publicKey;
 
       return {
         success: true,
         transaction,
         buildTimestamp,
+        blockhash,
         metadata: {
           mint: parsedTrade.mint,
           amount: appConfig.trading.copyAmountSol.toString()
@@ -112,13 +232,17 @@ export class DirectCallBuilder {
   async buildTransactionWithTiming(parsedTrade: ParsedTrade): Promise<BuildResult> {
     const buildTimestamp = Date.now();
     const timing = {
-      fetchAccounts: 0,
+      parallelFetch: 0,
       calculateAmount: 0,
       buildInstructions: 0,
       total: 0
     };
 
     try {
+      if (!this.cacheInitialized) {
+        throw new Error('Builder not initialized. Call initialize() first.');
+      }
+
       if (parsedTrade.type !== 'BUY') {
         return {
           success: false,
@@ -134,54 +258,62 @@ export class DirectCallBuilder {
       );
       const slippageBasisPoints = BigInt(appConfig.trading.slippageBps);
 
-      // TIME: Fetch all three accounts (like SDK does)
+      const bondingCurvePDA = this.sdk.pda.getBondingCurvePDA(mint);
+
+      // TIME: Parallel fetch bonding curve + blockhash (NO creator fetch!)
       const t1 = Date.now();
-      const bondingCurveAccount = await this.sdk.token.getBondingCurveAccount(
-        mint,
-        appConfig.rpc.commitment
-      );
+      const [bondingCurveAccount, { blockhash }] = await Promise.all([
+        this.sdk.token.getBondingCurveAccount(mint, appConfig.rpc.commitment),
+        this.connection.getLatestBlockhash(appConfig.rpc.commitment)
+      ]);
+      timing.parallelFetch = Date.now() - t1;
+      
       if (!bondingCurveAccount) {
         throw new Error(`Bonding curve account not found: ${mint.toBase58()}`);
       }
 
-      const feeConfig = await this.sdk.token.getFeeConfig(appConfig.rpc.commitment);
-      const globalAccount = await this.sdk.token.getGlobalAccount(appConfig.rpc.commitment);
-      timing.fetchAccounts = Date.now() - t1;
+      // Extract creator directly from bonding curve - no extra RPC call!
+      const bondingCreator = new PublicKey(bondingCurveAccount.creator);
 
-      // TIME: Calculate buy amount using SDK's method
+      // TIME: Calculate amount using cached config
       const t2 = Date.now();
       const buyAmount = bondingCurveAccount.getBuyPrice(
-        globalAccount,
-        feeConfig,
+        this.globalAccount,
+        this.feeConfig,
         buyAmountSol
       );
       const buyAmountWithSlippage = buyAmountSol + (buyAmountSol * slippageBasisPoints / 10000n);
       timing.calculateAmount = Date.now() - t2;
 
-      // TIME: Build instructions (like SDK's buildBuyIx)
+      // TIME: Build instructions
       const t3 = Date.now();
       const transaction = new Transaction();
       
-      const bondingCurve = this.sdk.pda.getBondingCurvePDA(mint);
+      const bondingCurve = bondingCurvePDA;
       const associatedBonding = await getAssociatedTokenAddress(
         mint,
         bondingCurve,
         true
       );
 
-      const associatedUser = await this.sdk.token.createAssociatedTokenAccountIfNeeded(
-        this.botKeypair.publicKey,
-        this.botKeypair.publicKey,
+      // Use idempotent ATA creation (no existence check - saves ~100ms)
+      const associatedUser = await getAssociatedTokenAddress(
         mint,
-        transaction,
-        appConfig.rpc.commitment
+        this.botKeypair.publicKey
+      );
+
+      transaction.add(
+        createAssociatedTokenAccountIdempotentInstruction(
+          this.botKeypair.publicKey,
+          associatedUser,
+          this.botKeypair.publicKey,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        )
       );
 
       const globalAccountPDA = this.sdk.pda.getGlobalAccountPda();
-      const bondingCreator = await this.sdk.token.getBondingCurveCreator(
-        bondingCurve,
-        appConfig.rpc.commitment
-      );
       const creatorVault = this.sdk.pda.getCreatorVaultPda(bondingCreator);
       const eventAuthority = this.sdk.pda.getEventAuthorityPda();
 
@@ -189,7 +321,7 @@ export class DirectCallBuilder {
         .buy(new BN(buyAmount.toString()), new BN(buyAmountWithSlippage.toString()))
         .accounts({
           global: globalAccountPDA,
-          feeRecipient: globalAccount.feeRecipient,
+          feeRecipient: this.globalAccount.feeRecipient,
           mint,
           bondingCurve,
           associatedBondingCurve: associatedBonding,
@@ -204,9 +336,7 @@ export class DirectCallBuilder {
         .instruction();
 
       transaction.add(ix);
-
-      // Executor will fetch blockhash - don't fetch it here
-      // Just set fee payer
+      transaction.recentBlockhash = blockhash;
       transaction.feePayer = this.botKeypair.publicKey;
 
       timing.buildInstructions = Date.now() - t3;
@@ -216,6 +346,7 @@ export class DirectCallBuilder {
         success: true,
         transaction,
         buildTimestamp,
+        blockhash,
         metadata: {
           mint: parsedTrade.mint,
           amount: appConfig.trading.copyAmountSol.toString()
