@@ -34,7 +34,7 @@ export interface ExecutionOptions {
 }
 
 const DEFAULT_OPTIONS: ExecutionOptions = {
-  skipPreflight: false,
+  skipPreflight: true,
   maxRetries: 3,
 };
 

@@ -1,4 +1,4 @@
-// src/bot/core/builder.ts
+// src/bot/core/sdk-builder.ts
 import { 
   Connection, 
   Keypair, 
@@ -22,8 +22,6 @@ export interface BuildResult {
     amount: string;
   };
   timing?: {
-    bondingCurveCheck: number;
-    amountConversion: number;
     sdkBuild: number;
     total: number;
   };
@@ -65,24 +63,11 @@ export class TransactionBuilder {
       }
 
       const mintPubkey = new PublicKey(parsedTrade.mint);
-      
-      const bondingCurve = await this.sdk.token.getBondingCurveAccount(
-        mintPubkey, 
-        appConfig.rpc.commitment
-      );
-      
-      if (!bondingCurve) {
-        return {
-          success: false,
-          error: 'Bonding curve not found - token may have graduated',
-          buildTimestamp
-        };
-      }
-
       const buyAmountLamports = BigInt(
         TRADING_UTILS.solToLamports(appConfig.trading.copyAmountSol)
       );
 
+      // Just build the transaction, executor will handle blockhash
       const transaction = await this.sdk.trade.getBuyInstructionsBySolAmount(
         this.botKeypair.publicKey,
         mintPubkey,
@@ -90,6 +75,9 @@ export class TransactionBuilder {
         BigInt(appConfig.trading.slippageBps),
         appConfig.rpc.commitment
       );
+
+      // Set fee payer
+      transaction.feePayer = this.botKeypair.publicKey;
 
       return {
         success: true,
@@ -113,8 +101,6 @@ export class TransactionBuilder {
   async buildTransactionWithTiming(parsedTrade: ParsedTrade): Promise<BuildResult> {
     const buildTimestamp = Date.now();
     const timing = {
-      bondingCurveCheck: 0,
-      amountConversion: 0,
       sdkBuild: 0,
       total: 0,
     };
@@ -129,30 +115,12 @@ export class TransactionBuilder {
       }
 
       const mintPubkey = new PublicKey(parsedTrade.mint);
-      
-      const t1 = Date.now();
-      const bondingCurve = await this.sdk.token.getBondingCurveAccount(
-        mintPubkey, 
-        appConfig.rpc.commitment
-      );
-      timing.bondingCurveCheck = Date.now() - t1;
-      
-      if (!bondingCurve) {
-        return {
-          success: false,
-          error: 'Bonding curve not found',
-          buildTimestamp,
-          timing
-        };
-      }
-
-      const t2 = Date.now();
       const buyAmountLamports = BigInt(
         TRADING_UTILS.solToLamports(appConfig.trading.copyAmountSol)
       );
-      timing.amountConversion = Date.now() - t2;
 
-      const t3 = Date.now();
+      // TIME: SDK build (no blockhash fetch)
+      const t1 = Date.now();
       const transaction = await this.sdk.trade.getBuyInstructionsBySolAmount(
         this.botKeypair.publicKey,
         mintPubkey,
@@ -160,7 +128,9 @@ export class TransactionBuilder {
         BigInt(appConfig.trading.slippageBps),
         appConfig.rpc.commitment
       );
-      timing.sdkBuild = Date.now() - t3;
+      timing.sdkBuild = Date.now() - t1;
+
+      transaction.feePayer = this.botKeypair.publicKey;
 
       timing.total = Date.now() - buildTimestamp;
 
