@@ -1,3 +1,4 @@
+// src/bot/core/detector.ts
 import { 
   subscribe, 
   CommitmentLevel, 
@@ -5,8 +6,10 @@ import {
   SubscribeRequest,
   SubscribeUpdate
 } from 'helius-laserstream';
-import { appConfig, PUMP_FUN_CONSTANTS } from '../../config/config';
+import { appConfig, PUMP_FUN_CONSTANTS, PUMP_SWAP_CONSTANTS } from '../../config/config';
 import bs58 from 'bs58';
+
+export type Protocol = 'PUMP_FUN' | 'PUMP_SWAP' | 'UNKNOWN';
 
 export interface DetectedTransaction {
   signature: string;
@@ -17,9 +20,10 @@ export interface DetectedTransaction {
   timestamp: number;
   receivedTimestamp: number;
   processedTimestamp: number;
+  protocol: Protocol;
 }
 
-export class PumpFunDetector {
+export class Detector {
   private stream: any = null;
   private isRunning = false;
   private transactionCallback: ((transaction: DetectedTransaction) => void) | null = null;
@@ -41,16 +45,40 @@ export class PumpFunDetector {
         endpoint: appConfig.laserstream.endpoint,
       };
 
+      console.log(`Starting unified detector`);
+      console.log(`Watching wallets: ${appConfig.trading.watchWallets.join(', ')}`);
+      console.log(`pump.fun enabled: ${appConfig.trading.protocols.pumpFun.enabled}`);
+      console.log(`PumpSwap enabled: ${appConfig.trading.protocols.pumpSwap.enabled}`);
+
+      // Build subscription with separate keys for each protocol
+      const transactions: any = {};
+
+      if (appConfig.trading.protocols.pumpFun.enabled) {
+        transactions.pumpFun = {
+          accountInclude: appConfig.trading.watchWallets,
+          accountExclude: [],
+          accountRequired: [PUMP_FUN_CONSTANTS.PROGRAM_ID],
+          vote: false,
+          failed: false
+        };
+      }
+
+      if (appConfig.trading.protocols.pumpSwap.enabled) {
+        transactions.pumpSwap = {
+          accountInclude: appConfig.trading.watchWallets,
+          accountExclude: [],
+          accountRequired: [PUMP_SWAP_CONSTANTS.PROGRAM_ID],
+          vote: false,
+          failed: false
+        };
+      }
+
+      if (Object.keys(transactions).length === 0) {
+        throw new Error('No protocols enabled - cannot start detector');
+      }
+
       const subscriptionRequest: SubscribeRequest = {
-        transactions: {
-          pumpFun: {
-            accountInclude: appConfig.trading.watchWallets,
-            accountExclude: [],
-            accountRequired: [PUMP_FUN_CONSTANTS.PROGRAM_ID],
-            vote: false,
-            failed: false
-          }
-        },
+        transactions,
         commitment: CommitmentLevel.PROCESSED,
         accounts: {},
         slots: {},
@@ -68,6 +96,8 @@ export class PumpFunDetector {
         (error: any) => console.error("Stream error:", error)
       );
 
+      console.log('Stream subscribed successfully');
+
     } catch (error) {
       console.error("Failed to start detector:", error);
       this.isRunning = false;
@@ -82,6 +112,24 @@ export class PumpFunDetector {
       this.stream.cancel();
       this.stream = null;
     }
+  }
+
+  private identifyProtocol(accountKeys: string[], instructions: any[]): Protocol {
+    // Check which program IDs are present in the transaction
+    const hasPumpFun = instructions.some(ix => {
+      if (ix.programIdIndex === undefined) return false;
+      return accountKeys[ix.programIdIndex] === PUMP_FUN_CONSTANTS.PROGRAM_ID;
+    });
+
+    const hasPumpSwap = instructions.some(ix => {
+      if (ix.programIdIndex === undefined) return false;
+      return accountKeys[ix.programIdIndex] === PUMP_SWAP_CONSTANTS.PROGRAM_ID;
+    });
+
+    // Prioritize pump.fun if both are present (edge case)
+    if (hasPumpFun) return 'PUMP_FUN';
+    if (hasPumpSwap) return 'PUMP_SWAP';
+    return 'UNKNOWN';
   }
 
   private handleIncomingData(update: SubscribeUpdate): void {
@@ -111,6 +159,12 @@ export class PumpFunDetector {
 
       const processedTimestamp = Date.now();
 
+      // Identify which protocol this transaction belongs to
+      const protocol = this.identifyProtocol(
+        decodedTransaction.message.accountKeys, 
+        allInstructions
+      );
+
       const detectedTransaction: DetectedTransaction = {
         signature,
         accountKeys: decodedTransaction.message.accountKeys,
@@ -119,7 +173,8 @@ export class PumpFunDetector {
         slot: update.transaction.slot,
         timestamp: Date.now(),
         receivedTimestamp,
-        processedTimestamp
+        processedTimestamp,
+        protocol
       };
 
       if (this.transactionCallback) {

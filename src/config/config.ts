@@ -1,8 +1,9 @@
+// config/config.ts
 import config from 'config';
 import { PublicKey, LAMPORTS_PER_SOL, Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 
-// Domain-specific constants from QuickNode (pump.fun knowledge)
+// Pump.fun constants
 export const PUMP_FUN_CONSTANTS = {
   PROGRAM_ID: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
   FEE_ACCOUNT: "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM",
@@ -21,6 +22,29 @@ export const PUMP_FUN_CONSTANTS = {
   },
 } as const;
 
+// PumpSwap constants
+export const PUMP_SWAP_CONSTANTS = {
+  PROGRAM_ID: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+  FEE_PROGRAM_ID: "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+  BUY_DISCRIMINATOR: Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]),
+  SELL_DISCRIMINATOR: Buffer.from([51, 230, 133, 164, 1, 127, 131, 173]),
+  TOKEN_DECIMALS: 6,
+  TARGET_ACCOUNTS: {
+    BUY: [
+      { name: "pool", index: 0 },
+      { name: "user", index: 1 },
+      { name: "base_mint", index: 3 },
+      { name: "quote_mint", index: 4 },
+    ],
+    SELL: [
+      { name: "pool", index: 0 },
+      { name: "user", index: 1 },
+      { name: "base_mint", index: 3 },
+      { name: "quote_mint", index: 4 },
+    ],
+  },
+} as const;
+
 // TypeScript interface for type safety
 interface CopyTradingConfig {
   mode: 'simulate' | 'live';
@@ -34,19 +58,29 @@ interface CopyTradingConfig {
   };
   trading: {
     watchWallets: string[];
-    copyAmountSol: number;
     minTradeAmountSol: number;
-    slippageBps: number;
     priorityFee: {
       unitLimit: number;
       unitPrice: number;
     };
+    protocols: {
+      pumpFun: {
+        enabled: boolean;
+        buyAmountSol: number;
+        slippageBps: number;
+      };
+      pumpSwap: {
+        enabled: boolean;
+        buyAmountSol: number;
+        slippageBps: number;
+      };
+    };
   };
   wallet: {
-    privateKey: string;      // Bot wallet (executes copies)
+    privateKey: string;
   };
   testing: {
-    sourceWalletPrivateKey: string;  // Source wallet (for tests only)
+    sourceWalletPrivateKey: string;
   };
   logging: {
     logFile: string;
@@ -76,18 +110,16 @@ class ConfigValidator {
       throw new Error(`Missing environment variables: ${missing.join(', ')}`);
     }
 
-    // Validate bot private key format (should be base58)
     try {
       const privateKey = process.env.BOT_WALLET_PRIVATE_KEY!;
       if (privateKey.length < 32) {
         throw new Error('Bot wallet private key appears to be too short');
       }
-      bs58.decode(privateKey); // Test decode
+      bs58.decode(privateKey);
     } catch {
       throw new Error('Invalid bot wallet private key format - should be base58 encoded');
     }
 
-    // Validate source private key if provided (optional for production)
     if (process.env.SOURCE_WALLET_PRIVATE_KEY) {
       try {
         const sourceKey = process.env.SOURCE_WALLET_PRIVATE_KEY;
@@ -102,20 +134,38 @@ class ConfigValidator {
   }
 
   private static validateTradingParams(trading: any): void {
-    if (trading.copyAmountSol <= 0) {
-      throw new Error('Copy amount must be positive');
-    }
-
     if (trading.minTradeAmountSol <= 0) {
       throw new Error('Minimum trade amount must be positive');
     }
 
-    if (trading.copyAmountSol < trading.minTradeAmountSol) {
-      console.warn('WARNING: Copy amount is less than minimum trade amount - no trades will be copied');
+    // Validate pump.fun config
+    if (trading.protocols.pumpFun.enabled) {
+      if (trading.protocols.pumpFun.buyAmountSol <= 0) {
+        throw new Error('pump.fun buy amount must be positive');
+      }
+      if (trading.protocols.pumpFun.buyAmountSol < trading.minTradeAmountSol) {
+        console.warn('WARNING: pump.fun buy amount is less than minimum trade amount');
+      }
+      if (trading.protocols.pumpFun.slippageBps < 0 || trading.protocols.pumpFun.slippageBps > 10000) {
+        throw new Error('pump.fun slippage must be between 0 and 10000 basis points (0-100%)');
+      }
     }
 
-    if (trading.slippageBps < 0 || trading.slippageBps > 10000) {
-      throw new Error('Slippage must be between 0 and 10000 basis points (0-100%)');
+    // Validate PumpSwap config
+    if (trading.protocols.pumpSwap.enabled) {
+      if (trading.protocols.pumpSwap.buyAmountSol <= 0) {
+        throw new Error('PumpSwap buy amount must be positive');
+      }
+      if (trading.protocols.pumpSwap.buyAmountSol < trading.minTradeAmountSol) {
+        console.warn('WARNING: PumpSwap buy amount is less than minimum trade amount');
+      }
+      if (trading.protocols.pumpSwap.slippageBps < 0 || trading.protocols.pumpSwap.slippageBps > 10000) {
+        throw new Error('PumpSwap slippage must be between 0 and 10000 basis points (0-100%)');
+      }
+    }
+
+    if (!trading.protocols.pumpFun.enabled && !trading.protocols.pumpSwap.enabled) {
+      throw new Error('At least one protocol (pumpFun or pumpSwap) must be enabled');
     }
   }
 
@@ -142,11 +192,9 @@ class ConfigValidator {
       logging: config.get('logging')
     };
 
-    // Validate all parameters
     this.validateWallets(cfg.trading.watchWallets);
     this.validateTradingParams(cfg.trading);
 
-    // Log configuration summary
     const botKeypair = Keypair.fromSecretKey(bs58.decode(cfg.wallet.privateKey));
     
     console.log(`Config loaded: ${cfg.mode} mode`);
@@ -155,23 +203,24 @@ class ConfigValidator {
       console.log(`   - ${wallet.substring(0, 4)}...${wallet.slice(-4)}`)
     );
     console.log(`Bot wallet: ${botKeypair.publicKey.toBase58().substring(0, 4)}...${botKeypair.publicKey.toBase58().slice(-4)}`);
-    console.log(`Copy amount: ${cfg.trading.copyAmountSol} SOL`);
     console.log(`Min trade size: ${cfg.trading.minTradeAmountSol} SOL`);
+    console.log(`Enabled protocols:`);
+    if (cfg.trading.protocols.pumpFun.enabled) {
+      console.log(`   - pump.fun: ${cfg.trading.protocols.pumpFun.buyAmountSol} SOL, ${cfg.trading.protocols.pumpFun.slippageBps} bps slippage`);
+    }
+    if (cfg.trading.protocols.pumpSwap.enabled) {
+      console.log(`   - PumpSwap: ${cfg.trading.protocols.pumpSwap.buyAmountSol} SOL, ${cfg.trading.protocols.pumpSwap.slippageBps} bps slippage`);
+    }
     
     return cfg;
   }
 }
 
-// Utility functions for common calculations
 export const TRADING_UTILS = {
   solToLamports: (sol: number) => Math.floor(sol * LAMPORTS_PER_SOL),
   lamportsToSol: (lamports: number) => lamports / LAMPORTS_PER_SOL,
-  
-  // Helper to check if transaction amount meets minimum
   meetsMinimumTrade: (amountLamports: number, minSol: number) => 
     amountLamports >= Math.floor(minSol * LAMPORTS_PER_SOL),
-    
-  // Helper to format amounts for logging
   formatAmount: (lamports: number) => `${(lamports / LAMPORTS_PER_SOL).toFixed(6)} SOL`
 } as const;
 

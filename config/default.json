@@ -7,15 +7,25 @@
     "watchWallets": [
       "GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN"
     ],
-    "copyAmountSol": 0.01,
-    "minTradeAmountSol": 0.005,
-    "slippageBps": 500,
+    "minTradeAmountSol": 0.001,
     "priorityFee": {
       "unitLimit": 250000,
       "unitPrice": 250000
+    },
+    "protocols": {
+      "pumpFun": {
+        "enabled": true,
+        "buyAmountSol": 0.1,
+        "slippageBps": 500
+      },
+      "pumpSwap": {
+        "enabled": true,
+        "buyAmountSol": 0.002,
+        "slippageBps": 1000
+      }
     }
   },
   "logging": {
-    "logFile": "pump_fun_swaps.json"
+    "logFile": "logs/bot.log"
   }
 }

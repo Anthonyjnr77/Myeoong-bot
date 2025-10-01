@@ -16,10 +16,13 @@
     "script:test-ata": "tsx scripts/test-ata.ts",
     "script:test-direct-calls": "tsx scripts/test-direct-calls.ts",
     "script:test-direct-calls-quick": "tsx scripts/test-direct-calls-quick.ts",
-    "script:debug-timing": "tsx scripts/debug-timing.ts"
+    "script:debug-timing": "tsx scripts/debug-timing.ts",
+    "script:test-swap": "tsx scripts/test-swap.ts",
+    "script:test-buy-sell": "tsx scripts/test-buy-sell.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
+    "@pump-fun/pump-swap-sdk": "^1.7.9",
     "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
     "config": "^4.1.1",
