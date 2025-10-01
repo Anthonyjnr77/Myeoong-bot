@@ -1,6 +1,6 @@
-// src/bot/core/parser.ts
+// src/parser.ts
 import { DetectedTransaction, Protocol } from './detector';
-import { PUMP_FUN_CONSTANTS, PUMP_SWAP_CONSTANTS, TRADING_UTILS, appConfig } from '../../config/config';
+import { PUMP_FUN_CONSTANTS, PUMP_SWAP_CONSTANTS, TRADING_UTILS, appConfig } from './config/config';
 
 export interface ParsedTrade {
   protocol: Protocol;

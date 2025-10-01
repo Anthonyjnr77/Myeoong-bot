@@ -1,11 +1,11 @@
-// src/bot/core/executor.ts
+// src/executor.ts
 import {
   Connection,
   Keypair,
   Transaction,
   ComputeBudgetProgram,
 } from '@solana/web3.js';
-import { appConfig } from '../../config/config';
+import { appConfig } from './config/config';
 
 export interface ExecutionResult {
   success: boolean;

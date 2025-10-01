@@ -1,12 +1,12 @@
-// src/bot/core/detector.ts
-import { 
-  subscribe, 
-  CommitmentLevel, 
-  LaserstreamConfig, 
+// src/detector.ts
+import {
+  subscribe,
+  CommitmentLevel,
+  LaserstreamConfig,
   SubscribeRequest,
   SubscribeUpdate
 } from 'helius-laserstream';
-import { appConfig, PUMP_FUN_CONSTANTS, PUMP_SWAP_CONSTANTS } from '../../config/config';
+import { appConfig, PUMP_FUN_CONSTANTS, PUMP_SWAP_CONSTANTS } from './config/config';
 import bs58 from 'bs58';
 
 export type Protocol = 'PUMP_FUN' | 'PUMP_SWAP' | 'UNKNOWN';

@@ -1,15 +1,15 @@
-// src/bot/core/sdk-builder.ts
-import { 
-  Connection, 
-  Keypair, 
-  PublicKey, 
-  LAMPORTS_PER_SOL, 
-  Transaction 
+// src/sdk-builder.ts
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+  Transaction
 } from '@solana/web3.js';
 import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
 import { PumpFunSDK } from 'pumpdotfun-repumped-sdk';
 import { ParsedTrade } from './parser';
-import { appConfig, TRADING_UTILS } from '../../config/config';
+import { appConfig, TRADING_UTILS } from './config/config';
 import bs58 from 'bs58';
 
 export interface BuildResult {

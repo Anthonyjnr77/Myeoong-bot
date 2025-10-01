@@ -1,12 +1,12 @@
-// src/bot/core/pumpswap-builder.ts
-import { 
-  Connection, 
-  Keypair, 
-  PublicKey, 
+// src/pumpswap-builder.ts
+import {
+  Connection,
+  Keypair,
+  PublicKey,
   Transaction,
   SystemProgram
 } from '@solana/web3.js';
-import { 
+import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
   createSyncNativeInstruction,
@@ -19,7 +19,7 @@ import {
 } from '@solana/spl-token';
 import BN from 'bn.js';
 import { ParsedTrade } from './parser';
-import { appConfig, TRADING_UTILS } from '../../config/config';
+import { appConfig, TRADING_UTILS } from './config/config';
 import bs58 from 'bs58';
 import { 
   PUMP_AMM_SDK,

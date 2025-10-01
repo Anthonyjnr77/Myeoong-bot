@@ -1,14 +1,14 @@
-// src/bot/core/pumpfun-builder.ts
-import { 
-  Connection, 
-  Keypair, 
-  PublicKey, 
+// src/pumpfun-builder.ts
+import {
+  Connection,
+  Keypair,
+  PublicKey,
   Transaction,
   SystemProgram,
   SYSVAR_RENT_PUBKEY
 } from '@solana/web3.js';
 import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
-import { 
+import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
   TOKEN_PROGRAM_ID,
@@ -18,7 +18,7 @@ import {
 import BN from 'bn.js';
 import { PumpFunSDK } from './pumpfun-sdk/PumpFunSDK';
 import { ParsedTrade } from './parser';
-import { appConfig, TRADING_UTILS } from '../../config/config';
+import { appConfig, TRADING_UTILS } from './config/config';
 import bs58 from 'bs58';
 
 export interface BuildResult {
