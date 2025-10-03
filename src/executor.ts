@@ -149,10 +149,10 @@ export class TransactionExecutor {
 
     } catch (error) {
       timing.total = Date.now() - executionTimestamp;
-      
+
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown execution error',
+        error: `Transaction execution failed - ${error instanceof Error ? error.message : 'Unknown error'} (wallet: ${signer.publicKey.toBase58()})`,
         latency: {
           preparation: 0,
           signing: 0,

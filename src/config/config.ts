@@ -1,6 +1,6 @@
 // config/config.ts
 import config from 'config';
-import { PublicKey, LAMPORTS_PER_SOL, Keypair } from '@solana/web3.js';
+import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import bs58 from 'bs58';
 
 // Pump.fun constants
@@ -88,11 +88,11 @@ interface CopyTradingConfig {
 }
 
 class ConfigValidator {
-  private static validateWallets(wallets: string[]): void {
-    if (wallets.length === 0) {
+  private static validateWallets(wallets: string[], allowEmpty: boolean = false): void {
+    if (!allowEmpty && wallets.length === 0) {
       throw new Error('At least one wallet must be specified in watchWallets');
     }
-    
+
     wallets.forEach(wallet => {
       try {
         new PublicKey(wallet);
@@ -105,7 +105,7 @@ class ConfigValidator {
   private static validateEnvironment(): void {
     const required = ['HELIUS_API_KEY', 'HELIUS_RPC_ENDPOINT', 'LASERSTREAM_ENDPOINT', 'BOT_WALLET_PRIVATE_KEY'];
     const missing = required.filter(key => !process.env[key]);
-    
+
     if (missing.length > 0) {
       throw new Error(`Missing environment variables: ${missing.join(', ')}`);
     }
@@ -171,7 +171,13 @@ class ConfigValidator {
 
   static validate(): CopyTradingConfig {
     this.validateEnvironment();
-    
+
+    // Parse wallets from environment variable
+    const watchWallets = process.env.WATCH_WALLETS
+      ?.split(',')
+      .map(w => w.trim())
+      .filter(w => w.length > 0) || [];
+
     const cfg: CopyTradingConfig = {
       mode: config.get('mode'),
       rpc: {
@@ -182,7 +188,10 @@ class ConfigValidator {
         endpoint: process.env.LASERSTREAM_ENDPOINT!,
         apiKey: process.env.HELIUS_API_KEY!
       },
-      trading: config.get('trading'),
+      trading: {
+        ...config.get('trading'),
+        watchWallets  // Use parsed wallets from env
+      },
       wallet: {
         privateKey: process.env.BOT_WALLET_PRIVATE_KEY!
       },
@@ -192,26 +201,10 @@ class ConfigValidator {
       logging: config.get('logging')
     };
 
-    this.validateWallets(cfg.trading.watchWallets);
+    // Allow empty wallets from .env (can be provided via CLI)
+    this.validateWallets(cfg.trading.watchWallets, true);
     this.validateTradingParams(cfg.trading);
 
-    const botKeypair = Keypair.fromSecretKey(bs58.decode(cfg.wallet.privateKey));
-    
-    console.log(`Config loaded: ${cfg.mode} mode`);
-    console.log(`Watching ${cfg.trading.watchWallets.length} wallets:`);
-    cfg.trading.watchWallets.forEach(wallet => 
-      console.log(`   - ${wallet.substring(0, 4)}...${wallet.slice(-4)}`)
-    );
-    console.log(`Bot wallet: ${botKeypair.publicKey.toBase58().substring(0, 4)}...${botKeypair.publicKey.toBase58().slice(-4)}`);
-    console.log(`Min trade size: ${cfg.trading.minTradeAmountSol} SOL`);
-    console.log(`Enabled protocols:`);
-    if (cfg.trading.protocols.pumpFun.enabled) {
-      console.log(`   - pump.fun: ${cfg.trading.protocols.pumpFun.buyAmountSol} SOL, ${cfg.trading.protocols.pumpFun.slippageBps} bps slippage`);
-    }
-    if (cfg.trading.protocols.pumpSwap.enabled) {
-      console.log(`   - PumpSwap: ${cfg.trading.protocols.pumpSwap.buyAmountSol} SOL, ${cfg.trading.protocols.pumpSwap.slippageBps} bps slippage`);
-    }
-    
     return cfg;
   }
 }

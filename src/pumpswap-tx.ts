@@ -1,4 +1,4 @@
-// src/pumpswap-builder.ts
+// src/pumpswap-tx.ts
 import {
   Connection,
   Keypair,
@@ -21,7 +21,9 @@ import BN from 'bn.js';
 import { ParsedTrade } from './parser';
 import { appConfig, TRADING_UTILS } from './config/config';
 import bs58 from 'bs58';
-import { 
+import { toError } from './utils/errors';
+import { fetchWithRetry } from './utils/rpc-retry';
+import {
   PUMP_AMM_SDK,
   GLOBAL_CONFIG_PDA,
   PUMP_AMM_FEE_CONFIG_PDA,
@@ -33,7 +35,7 @@ import {
 import { buyQuoteInput } from './pumpswap-sdk/sdk/buy';
 import { sellBaseInput } from './pumpswap-sdk/sdk/sell';
 
-export interface BuildResult {
+export interface PumpSwapTxResult {
   success: boolean;
   transaction?: Transaction;
   error?: string;
@@ -52,7 +54,7 @@ export interface BuildResult {
   };
 }
 
-export class PumpSwapBuilder {
+export class PumpSwapTxBuilder {
   private connection: Connection;
   private botKeypair: Keypair;
   private program: any;
@@ -69,7 +71,7 @@ export class PumpSwapBuilder {
     this.program = PUMP_AMM_SDK.offlineProgram;
   }
 
-  async buildTransactionWithTiming(parsedTrade: ParsedTrade): Promise<BuildResult> {
+  async buildTransactionWithTiming(parsedTrade: ParsedTrade): Promise<PumpSwapTxResult> {
     const buildTimestamp = Date.now();
     const timing = {
       parallelFetch: 0,
@@ -82,7 +84,7 @@ export class PumpSwapBuilder {
       if (!parsedTrade.pool) {
         return {
           success: false,
-          error: 'Pool address missing from parsed trade',
+          error: `Pool address missing from parsed trade - cannot build PumpSwap transaction (mint: ${parsedTrade.mint})`,
           buildTimestamp,
           timing
         };
@@ -120,52 +122,66 @@ export class PumpSwapBuilder {
     baseMint: PublicKey,
     buildTimestamp: number,
     timing: { parallelFetch: number; calculateAmount: number; buildInstructions: number; total: number }
-  ): Promise<BuildResult> {
-    const quoteMint = NATIVE_MINT;
-    const buyAmountSol = new BN(
-      TRADING_UTILS.solToLamports(appConfig.trading.protocols.pumpSwap.buyAmountSol)
-    );
-    const slippage = appConfig.trading.protocols.pumpSwap.slippageBps / 100;
+  ): Promise<PumpSwapTxResult> {
+    try {
+      const quoteMint = NATIVE_MINT;
+      const buyAmountSol = new BN(
+        TRADING_UTILS.solToLamports(appConfig.trading.protocols.pumpSwap.buyAmountSol)
+      );
+      const slippage = appConfig.trading.protocols.pumpSwap.slippageBps / 100;
 
-    const poolBaseTokenAccount = getAssociatedTokenAddressSync(
-      baseMint,
-      poolPubkey,
-      true
-    );
-
-    const poolQuoteTokenAccount = getAssociatedTokenAddressSync(
-      quoteMint,
-      poolPubkey,
-      true
-    );
-
-    const t1 = Date.now();
-    const [accountInfos, { blockhash }] = await Promise.all([
-      this.connection.getMultipleAccountsInfo([
-        poolPubkey,
-        GLOBAL_CONFIG_PDA,
-        PUMP_AMM_FEE_CONFIG_PDA,
+      const poolBaseTokenAccount = getAssociatedTokenAddressSync(
         baseMint,
-        poolBaseTokenAccount,
-        poolQuoteTokenAccount
-      ]),
-      this.connection.getLatestBlockhash(appConfig.rpc.commitment)
-    ]);
+        poolPubkey,
+        true
+      );
 
-    const [
-      poolInfo,
-      globalConfigInfo,
-      feeConfigInfo,
-      baseMintInfo,
-      poolBaseAccountInfo,
-      poolQuoteAccountInfo
-    ] = accountInfos;
+      const poolQuoteTokenAccount = getAssociatedTokenAddressSync(
+        quoteMint,
+        poolPubkey,
+        true
+      );
 
-    if (!poolInfo || !globalConfigInfo || !baseMintInfo || !poolBaseAccountInfo || !poolQuoteAccountInfo) {
-      throw new Error('Failed to fetch required accounts');
-    }
+      const t1 = Date.now();
+      const [accountInfos, { blockhash }] = await Promise.all([
+        fetchWithRetry(() => this.connection.getMultipleAccountsInfo([
+          poolPubkey,
+          GLOBAL_CONFIG_PDA,
+          PUMP_AMM_FEE_CONFIG_PDA,
+          baseMint,
+          poolBaseTokenAccount,
+          poolQuoteTokenAccount
+        ])),
+        fetchWithRetry(() => this.connection.getLatestBlockhash(appConfig.rpc.commitment))
+      ]);
 
-    timing.parallelFetch = Date.now() - t1;
+      const [
+        poolInfo,
+        globalConfigInfo,
+        feeConfigInfo,
+        baseMintInfo,
+        poolBaseAccountInfo,
+        poolQuoteAccountInfo
+      ] = accountInfos;
+
+      timing.parallelFetch = Date.now() - t1;
+
+      // Safety: null account checks
+      if (!poolInfo) {
+        throw new Error(`Pool account not found - pool may be closed (pool: ${poolPubkey.toBase58()})`);
+      }
+      if (!globalConfigInfo) {
+        throw new Error(`Global config account not found - PumpSwap program may be misconfigured (pool: ${poolPubkey.toBase58()})`);
+      }
+      if (!baseMintInfo) {
+        throw new Error(`Base mint account not found - token may not exist on-chain (mint: ${baseMint.toBase58()})`);
+      }
+      if (!poolBaseAccountInfo) {
+        throw new Error(`Pool base token account not found - pool may be misconfigured (mint: ${baseMint.toBase58()}, pool: ${poolPubkey.toBase58()})`);
+      }
+      if (!poolQuoteAccountInfo) {
+        throw new Error(`Pool quote token account not found - pool may be misconfigured (pool: ${poolPubkey.toBase58()})`);
+      }
 
     const pool = PUMP_AMM_SDK.decodePool(poolInfo);
     const globalConfig = PUMP_AMM_SDK.decodeGlobalConfig(globalConfigInfo);
@@ -302,24 +318,33 @@ export class PumpSwapBuilder {
       )
     );
 
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = this.botKeypair.publicKey;
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = this.botKeypair.publicKey;
 
-    timing.buildInstructions = Date.now() - t3;
-    timing.total = Date.now() - buildTimestamp;
+      timing.buildInstructions = Date.now() - t3;
+      timing.total = Date.now() - buildTimestamp;
 
-    return {
-      success: true,
-      transaction,
-      buildTimestamp,
-      blockhash,
-      metadata: {
-        mint: baseMint.toBase58(),
-        pool: poolPubkey.toBase58(),
-        amount: appConfig.trading.protocols.pumpSwap.buyAmountSol.toString()
-      },
-      timing
-    };
+      return {
+        success: true,
+        transaction,
+        buildTimestamp,
+        blockhash,
+        metadata: {
+          mint: baseMint.toBase58(),
+          pool: poolPubkey.toBase58(),
+          amount: appConfig.trading.protocols.pumpSwap.buyAmountSol.toString()
+        },
+        timing
+      };
+    } catch (error) {
+      timing.total = Date.now() - buildTimestamp;
+      return {
+        success: false,
+        error: toError(error).message,
+        buildTimestamp,
+        timing
+      };
+    }
   }
 
   private async buildSellTransaction(
@@ -327,82 +352,86 @@ export class PumpSwapBuilder {
     baseMint: PublicKey,
     buildTimestamp: number,
     timing: { parallelFetch: number; calculateAmount: number; buildInstructions: number; total: number }
-  ): Promise<BuildResult> {
-    const quoteMint = NATIVE_MINT;
-    const slippage = appConfig.trading.protocols.pumpSwap.slippageBps / 100;
+  ): Promise<PumpSwapTxResult> {
+    try {
+      const quoteMint = NATIVE_MINT;
+      const slippage = appConfig.trading.protocols.pumpSwap.slippageBps / 100;
 
-    const poolBaseTokenAccount = getAssociatedTokenAddressSync(
-      baseMint,
-      poolPubkey,
-      true
-    );
-
-    const poolQuoteTokenAccount = getAssociatedTokenAddressSync(
-      quoteMint,
-      poolPubkey,
-      true
-    );
-
-    const baseTokenProgram = TOKEN_PROGRAM_ID; // Will get actual value from account fetch
-    const userBaseTokenAccount = getAssociatedTokenAddressSync(
-      baseMint,
-      this.botKeypair.publicKey,
-      false,
-      baseTokenProgram
-    );
-
-    // Fetch token balance + pool data + blockhash in parallel
-    const t1 = Date.now();
-    const [accountInfos, { blockhash }] = await Promise.all([
-      this.connection.getMultipleAccountsInfo([
-        userBaseTokenAccount, // Bot's token balance
-        poolPubkey,
-        GLOBAL_CONFIG_PDA,
-        PUMP_AMM_FEE_CONFIG_PDA,
+      const poolBaseTokenAccount = getAssociatedTokenAddressSync(
         baseMint,
-        poolBaseTokenAccount,
-        poolQuoteTokenAccount
-      ]),
-      this.connection.getLatestBlockhash(appConfig.rpc.commitment)
-    ]);
+        poolPubkey,
+        true
+      );
 
-    const [
-      tokenAccountInfo,
-      poolInfo,
-      globalConfigInfo,
-      feeConfigInfo,
-      baseMintInfo,
-      poolBaseAccountInfo,
-      poolQuoteAccountInfo
-    ] = accountInfos;
+      const poolQuoteTokenAccount = getAssociatedTokenAddressSync(
+        quoteMint,
+        poolPubkey,
+        true
+      );
 
-    if (!tokenAccountInfo) {
-      return {
-        success: false,
-        error: 'No token account found - nothing to sell',
-        buildTimestamp,
-        timing
-      };
-    }
+      const baseTokenProgram = TOKEN_PROGRAM_ID; // Will get actual value from account fetch
+      const userBaseTokenAccount = getAssociatedTokenAddressSync(
+        baseMint,
+        this.botKeypair.publicKey,
+        false,
+        baseTokenProgram
+      );
 
-    const tokenBalance = new BN(
-      AccountLayout.decode(tokenAccountInfo.data).amount.toString()
-    );
+      // Fetch token balance + pool data + blockhash in parallel
+      const t1 = Date.now();
+      const [accountInfos, { blockhash }] = await Promise.all([
+        fetchWithRetry(() => this.connection.getMultipleAccountsInfo([
+          userBaseTokenAccount, // Bot's token balance
+          poolPubkey,
+          GLOBAL_CONFIG_PDA,
+          PUMP_AMM_FEE_CONFIG_PDA,
+          baseMint,
+          poolBaseTokenAccount,
+          poolQuoteTokenAccount
+        ])),
+        fetchWithRetry(() => this.connection.getLatestBlockhash(appConfig.rpc.commitment))
+      ]);
 
-    if (tokenBalance.isZero()) {
-      return {
-        success: false,
-        error: 'Zero token balance - nothing to sell',
-        buildTimestamp,
-        timing
-      };
-    }
+      const [
+        tokenAccountInfo,
+        poolInfo,
+        globalConfigInfo,
+        feeConfigInfo,
+        baseMintInfo,
+        poolBaseAccountInfo,
+        poolQuoteAccountInfo
+      ] = accountInfos;
 
-    if (!poolInfo || !globalConfigInfo || !baseMintInfo || !poolBaseAccountInfo || !poolQuoteAccountInfo) {
-      throw new Error('Failed to fetch required accounts');
-    }
+      timing.parallelFetch = Date.now() - t1;
 
-    timing.parallelFetch = Date.now() - t1;
+      // Safety: null account checks
+      if (!tokenAccountInfo) {
+        throw new Error(`Bot token account not found - no tokens to sell (mint: ${baseMint.toBase58()}, wallet: ${this.botKeypair.publicKey.toBase58()})`);
+      }
+
+      const tokenBalance = new BN(
+        AccountLayout.decode(tokenAccountInfo.data).amount.toString()
+      );
+
+      if (tokenBalance.isZero()) {
+        throw new Error(`Zero token balance - bot wallet has no tokens to sell (mint: ${baseMint.toBase58()})`);
+      }
+
+      if (!poolInfo) {
+        throw new Error(`Pool account not found - pool may be closed (pool: ${poolPubkey.toBase58()})`);
+      }
+      if (!globalConfigInfo) {
+        throw new Error(`Global config account not found - PumpSwap program may be misconfigured (pool: ${poolPubkey.toBase58()})`);
+      }
+      if (!baseMintInfo) {
+        throw new Error(`Base mint account not found - token may not exist on-chain (mint: ${baseMint.toBase58()})`);
+      }
+      if (!poolBaseAccountInfo) {
+        throw new Error(`Pool base token account not found - pool may be misconfigured (mint: ${baseMint.toBase58()}, pool: ${poolPubkey.toBase58()})`);
+      }
+      if (!poolQuoteAccountInfo) {
+        throw new Error(`Pool quote token account not found - pool may be misconfigured (pool: ${poolPubkey.toBase58()})`);
+      }
 
     const pool = PUMP_AMM_SDK.decodePool(poolInfo);
     const globalConfig = PUMP_AMM_SDK.decodeGlobalConfig(globalConfigInfo);
@@ -513,24 +542,33 @@ export class PumpSwapBuilder {
       )
     );
 
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = this.botKeypair.publicKey;
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = this.botKeypair.publicKey;
 
-    timing.buildInstructions = Date.now() - t3;
-    timing.total = Date.now() - buildTimestamp;
+      timing.buildInstructions = Date.now() - t3;
+      timing.total = Date.now() - buildTimestamp;
 
-    return {
-      success: true,
-      transaction,
-      buildTimestamp,
-      blockhash,
-      metadata: {
-        mint: baseMint.toBase58(),
-        pool: poolPubkey.toBase58(),
-        amount: `${tokenBalance.toString()} tokens`
-      },
-      timing
-    };
+      return {
+        success: true,
+        transaction,
+        buildTimestamp,
+        blockhash,
+        metadata: {
+          mint: baseMint.toBase58(),
+          pool: poolPubkey.toBase58(),
+          amount: `${tokenBalance.toString()} tokens`
+        },
+        timing
+      };
+    } catch (error) {
+      timing.total = Date.now() - buildTimestamp;
+      return {
+        success: false,
+        error: toError(error).message,
+        buildTimestamp,
+        timing
+      };
+    }
   }
 
   getBotKeypair(): Keypair {

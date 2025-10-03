@@ -4,9 +4,8 @@
     "commitment": "processed"
   },
   "trading": {
-    "watchWallets": [
-      "GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN"
-    ],
+    "watchWallets": [],
+    "minBalance": 0.1,
     "minTradeAmountSol": 0.001,
     "priorityFee": {
       "unitLimit": 250000,
@@ -15,7 +14,7 @@
     "protocols": {
       "pumpFun": {
         "enabled": true,
-        "buyAmountSol": 0.1,
+        "buyAmountSol": 0.005,
         "slippageBps": 500
       },
       "pumpSwap": {
@@ -26,6 +25,6 @@
     }
   },
   "logging": {
-    "logFile": "logs/bot.log"
+    "logFile": "./logs/bot.log"
   }
 }

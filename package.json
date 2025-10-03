@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "bot": "tsx src/index.ts",
+    "trades": "tsx test/generate-trades.ts",
+    "test:validate": "tsx test/validate.ts",
+    "test:demo": "tsx test/demo.ts",
+    "test:latency": "tsx test/latency.ts",
+    "test:edge": "tsx test/edge-cases.ts",
     "script:listen-create-buy": "tsx scripts/listen-create-buy.ts",
     "script:listen-find-buy": "tsx scripts/listen-find-buy.ts",
     "script:test-detector": "tsx scripts/test-detector.ts",

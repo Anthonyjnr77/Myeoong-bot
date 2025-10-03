@@ -36,7 +36,6 @@ export async function sendTx(
     const sig = await connection.sendTransaction(versionedTx, {
       skipPreflight: false,
     });
-    console.log("sig:", `https://solscan.io/tx/${sig}`);
 
     let txResult = await getTxDetails(connection, sig, commitment, finality);
     if (!txResult) {

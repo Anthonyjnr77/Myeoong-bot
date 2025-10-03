@@ -1,11 +1,12 @@
-// src/pumpfun-builder.ts
+// src/pumpfun-tx.ts
 import {
   Connection,
   Keypair,
   PublicKey,
   Transaction,
   SystemProgram,
-  SYSVAR_RENT_PUBKEY
+  SYSVAR_RENT_PUBKEY,
+  ComputeBudgetProgram
 } from '@solana/web3.js';
 import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
 import {
@@ -20,8 +21,10 @@ import { PumpFunSDK } from './pumpfun-sdk/PumpFunSDK';
 import { ParsedTrade } from './parser';
 import { appConfig, TRADING_UTILS } from './config/config';
 import bs58 from 'bs58';
+import { toError } from './utils/errors';
+import { fetchWithRetry } from './utils/rpc-retry';
 
-export interface BuildResult {
+export interface PumpFunTxResult {
   success: boolean;
   transaction?: Transaction;
   error?: string;
@@ -39,7 +42,7 @@ export interface BuildResult {
   };
 }
 
-export class DirectCallBuilder {
+export class PumpFunTxBuilder {
   private connection: Connection;
   private botKeypair: Keypair;
   private sdk: PumpFunSDK;
@@ -68,8 +71,6 @@ export class DirectCallBuilder {
   }
 
   async initialize(): Promise<void> {
-    console.log('Initializing config cache...');
-    
     const [globalAccount, feeConfig] = await Promise.all([
       this.sdk.token.getGlobalAccount(appConfig.rpc.commitment),
       this.sdk.token.getFeeConfig(appConfig.rpc.commitment)
@@ -78,8 +79,6 @@ export class DirectCallBuilder {
     this.globalAccount = globalAccount;
     this.feeConfig = feeConfig;
     this.cacheInitialized = true;
-
-    console.log('Config cache initialized');
 
     this.refreshInterval = setInterval(() => {
       this.refreshCache();
@@ -95,10 +94,8 @@ export class DirectCallBuilder {
 
       this.globalAccount = globalAccount;
       this.feeConfig = feeConfig;
-      
-      console.log('Config cache refreshed');
     } catch (error) {
-      console.error('Failed to refresh config cache:', error);
+      // Silently skip - cache refresh failure
     }
   }
 
@@ -109,7 +106,7 @@ export class DirectCallBuilder {
     }
   }
 
-  async buildTransactionWithTiming(parsedTrade: ParsedTrade): Promise<BuildResult> {
+  async buildTransactionWithTiming(parsedTrade: ParsedTrade): Promise<PumpFunTxResult> {
     const buildTimestamp = Date.now();
     const timing = {
       parallelFetch: 0,
@@ -120,7 +117,7 @@ export class DirectCallBuilder {
 
     try {
       if (!this.cacheInitialized) {
-        throw new Error('Builder not initialized. Call initialize() first.');
+        throw new Error('PumpFun builder not initialized - call initialize() before building transactions');
       }
 
       const mint = new PublicKey(parsedTrade.mint);
@@ -153,24 +150,26 @@ export class DirectCallBuilder {
     mint: PublicKey,
     buildTimestamp: number,
     timing: { parallelFetch: number; calculateAmount: number; buildInstructions: number; total: number }
-  ): Promise<BuildResult> {
-    const buyAmountSol = BigInt(
-      TRADING_UTILS.solToLamports(appConfig.trading.protocols.pumpFun.buyAmountSol)
-    );
-    const slippageBasisPoints = BigInt(appConfig.trading.protocols.pumpFun.slippageBps);
+  ): Promise<PumpFunTxResult> {
+    try {
+      const buyAmountSol = BigInt(
+        TRADING_UTILS.solToLamports(appConfig.trading.protocols.pumpFun.buyAmountSol)
+      );
+      const slippageBasisPoints = BigInt(appConfig.trading.protocols.pumpFun.slippageBps);
 
-    const bondingCurvePDA = this.sdk.pda.getBondingCurvePDA(mint);
+      const bondingCurvePDA = this.sdk.pda.getBondingCurvePDA(mint);
 
-    const t1 = Date.now();
-    const [bondingCurveAccount, { blockhash }] = await Promise.all([
-      this.sdk.token.getBondingCurveAccount(mint, appConfig.rpc.commitment),
-      this.connection.getLatestBlockhash(appConfig.rpc.commitment)
-    ]);
-    timing.parallelFetch = Date.now() - t1;
-    
-    if (!bondingCurveAccount) {
-      throw new Error(`Bonding curve account not found: ${mint.toBase58()}`);
-    }
+      const t1 = Date.now();
+      const [bondingCurveAccount, { blockhash }] = await Promise.all([
+        fetchWithRetry(() => this.sdk.token.getBondingCurveAccount(mint, appConfig.rpc.commitment)),
+        fetchWithRetry(() => this.connection.getLatestBlockhash(appConfig.rpc.commitment))
+      ]);
+      timing.parallelFetch = Date.now() - t1;
+
+      // Safety: null account checks
+      if (!bondingCurveAccount) {
+        throw new Error(`Bonding curve not found - token may have graduated (mint: ${mint.toBase58()})`);
+      }
 
     const bondingCreator = new PublicKey(bondingCurveAccount.creator);
 
@@ -231,72 +230,73 @@ export class DirectCallBuilder {
       })
       .instruction();
 
-    transaction.add(ix);
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = this.botKeypair.publicKey;
+      transaction.add(ix);
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = this.botKeypair.publicKey;
 
-    timing.buildInstructions = Date.now() - t3;
-    timing.total = Date.now() - buildTimestamp;
+      timing.buildInstructions = Date.now() - t3;
+      timing.total = Date.now() - buildTimestamp;
 
-    return {
-      success: true,
-      transaction,
-      buildTimestamp,
-      blockhash,
-      metadata: {
-        mint: mint.toBase58(),
-        amount: appConfig.trading.protocols.pumpFun.buyAmountSol.toString()
-      },
-      timing
-    };
+      return {
+        success: true,
+        transaction,
+        buildTimestamp,
+        blockhash,
+        metadata: {
+          mint: mint.toBase58(),
+          amount: appConfig.trading.protocols.pumpFun.buyAmountSol.toString()
+        },
+        timing
+      };
+    } catch (error) {
+      timing.total = Date.now() - buildTimestamp;
+      return {
+        success: false,
+        error: toError(error).message,
+        buildTimestamp,
+        timing
+      };
+    }
   }
 
   private async buildSellTransaction(
     mint: PublicKey,
     buildTimestamp: number,
     timing: { parallelFetch: number; calculateAmount: number; buildInstructions: number; total: number }
-  ): Promise<BuildResult> {
-    const slippageBasisPoints = BigInt(appConfig.trading.protocols.pumpFun.slippageBps);
+  ): Promise<PumpFunTxResult> {
+    try {
+      const slippageBasisPoints = BigInt(appConfig.trading.protocols.pumpFun.slippageBps);
 
-    // Get bot's token account
-    const associatedUser = await getAssociatedTokenAddress(
-      mint,
-      this.botKeypair.publicKey
-    );
+      // Get bot's token account
+      const associatedUser = await getAssociatedTokenAddress(
+        mint,
+        this.botKeypair.publicKey
+      );
 
-    const bondingCurvePDA = this.sdk.pda.getBondingCurvePDA(mint);
+      const bondingCurvePDA = this.sdk.pda.getBondingCurvePDA(mint);
 
-    // Fetch token balance + bonding curve + blockhash in parallel
-    const t1 = Date.now();
-    const [tokenAccountInfo, bondingCurveAccount, { blockhash }] = await Promise.all([
-      this.connection.getAccountInfo(associatedUser),
-      this.sdk.token.getBondingCurveAccount(mint, appConfig.rpc.commitment),
-      this.connection.getLatestBlockhash(appConfig.rpc.commitment)
-    ]);
-    timing.parallelFetch = Date.now() - t1;
+      // Fetch token balance + bonding curve + blockhash in parallel
+      const t1 = Date.now();
+      const [tokenAccountInfo, bondingCurveAccount, { blockhash }] = await Promise.all([
+        fetchWithRetry(() => this.connection.getAccountInfo(associatedUser)),
+        fetchWithRetry(() => this.sdk.token.getBondingCurveAccount(mint, appConfig.rpc.commitment)),
+        fetchWithRetry(() => this.connection.getLatestBlockhash(appConfig.rpc.commitment))
+      ]);
+      timing.parallelFetch = Date.now() - t1;
 
-    if (!tokenAccountInfo) {
-      return {
-        success: false,
-        error: 'No token account found - nothing to sell',
-        buildTimestamp,
-        timing
-      };
-    }
+      // Safety: null account checks
+      if (!tokenAccountInfo) {
+        throw new Error(`Bot token account not found - no tokens to sell (mint: ${mint.toBase58()}, wallet: ${this.botKeypair.publicKey.toBase58()})`);
+      }
 
-    const tokenBalance = AccountLayout.decode(tokenAccountInfo.data).amount;
-    if (tokenBalance === 0n) {
-      return {
-        success: false,
-        error: 'Zero token balance - nothing to sell',
-        buildTimestamp,
-        timing
-      };
-    }
+      const tokenBalance = AccountLayout.decode(tokenAccountInfo.data).amount;
+      if (tokenBalance === 0n) {
+        throw new Error(`Zero token balance - bot wallet has no tokens to sell (mint: ${mint.toBase58()})`);
+      }
 
-    if (!bondingCurveAccount) {
-      throw new Error(`Bonding curve account not found: ${mint.toBase58()}`);
-    }
+      if (!bondingCurveAccount) {
+        throw new Error(`Bonding curve not found - token may have graduated (mint: ${mint.toBase58()})`);
+      }
 
     const bondingCreator = new PublicKey(bondingCurveAccount.creator);
 
@@ -342,24 +342,33 @@ export class DirectCallBuilder {
       })
       .instruction();
 
-    transaction.add(ix);
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = this.botKeypair.publicKey;
+      transaction.add(ix);
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = this.botKeypair.publicKey;
 
-    timing.buildInstructions = Date.now() - t3;
-    timing.total = Date.now() - buildTimestamp;
+      timing.buildInstructions = Date.now() - t3;
+      timing.total = Date.now() - buildTimestamp;
 
-    return {
-      success: true,
-      transaction,
-      buildTimestamp,
-      blockhash,
-      metadata: {
-        mint: mint.toBase58(),
-        amount: `${Number(tokenBalance) / 1e6} tokens` // Assumes 6 decimals
-      },
-      timing
-    };
+      return {
+        success: true,
+        transaction,
+        buildTimestamp,
+        blockhash,
+        metadata: {
+          mint: mint.toBase58(),
+          amount: `${Number(tokenBalance) / 1e6} tokens` // Assumes 6 decimals
+        },
+        timing
+      };
+    } catch (error) {
+      timing.total = Date.now() - buildTimestamp;
+      return {
+        success: false,
+        error: toError(error).message,
+        buildTimestamp,
+        timing
+      };
+    }
   }
 
   getBotKeypair(): Keypair {
