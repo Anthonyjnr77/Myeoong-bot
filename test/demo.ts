@@ -1,26 +1,24 @@
 import 'dotenv/config';
-import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL, Transaction } from '@solana/web3.js';
-import { getAssociatedTokenAddressSync } from '@solana/spl-token';
-import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
-import { PumpFunSDK } from '../src/pumpfun-sdk';
-import { OnlinePumpAmmSdk, PUMP_AMM_SDK } from '@pump-fun/pump-swap-sdk';
+import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { Detector } from '../src/detector';
 import { TradeParser } from '../src/parser';
 import { PumpFunTxBuilder } from '../src/pumpfun-tx';
 import { PumpSwapTxBuilder } from '../src/pumpswap-tx';
 import { TransactionExecutor } from '../src/executor';
 import { appConfig } from '../src/config/config';
+import {
+  calculateStats,
+  calculateStatsWithDecimal,
+  getTransactionSlot,
+  findPumpSwapPool,
+  createTestToken,
+  executePumpFunBuy,
+  executePumpFunSell,
+  executePumpSwapBuy,
+  executePumpSwapSell
+} from '../src/utils/test-utils';
+import { DEFAULTS, AMOUNTS, TIMEOUTS } from '../src/config/test-constants';
 import bs58 from 'bs58';
-import BN from 'bn.js';
-import fs from 'fs';
-import path from 'path';
-
-const NUM_CYCLES = 5;
-const PUMPSWAP_TRADE_AMOUNT = 0.002;
-const PUMPSWAP_MIN_POOL = 20;
-const PUMPSWAP_MAX_POOL = 100;
-const POOL_CACHE_FILE = path.join(__dirname, '../data/pumpswap-pool.json');
-const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface TradeResult {
   latency: number;
@@ -47,153 +45,28 @@ interface FailedTrade {
   error: string;
 }
 
-function calculateStats(values: number[]): { p50: number; p95: number; avg: number } {
-  if (values.length === 0) return { p50: 0, p95: 0, avg: 0 };
-  const sorted = [...values].sort((a, b) => a - b);
-  return {
-    p50: sorted[Math.floor(sorted.length * 0.5)],
-    p95: sorted[Math.floor(sorted.length * 0.95)],
-    avg: Math.round(sorted.reduce((sum, v) => sum + v, 0) / sorted.length)
-  };
-}
-
-async function getTransactionSlot(
-  connection: Connection,
-  signature: string,
-  timeoutMs: number = 60000
-): Promise<number | null> {
-  const startTime = Date.now();
-  
-  while (Date.now() - startTime < timeoutMs) {
-    try {
-      const tx = await connection.getTransaction(signature, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0
-      });
-      
-      if (tx?.slot) {
-        return tx.slot;
-      }
-    } catch {}
-    
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-  
-  return null;
-}
-
 async function waitForConfirmation(
   connection: Connection,
   signature: string,
-  timeoutMs: number = 30000
+  timeoutMs: number = TIMEOUTS.CONFIRMATION_MS
 ): Promise<boolean> {
   const startTime = Date.now();
   while (Date.now() - startTime < timeoutMs) {
     try {
       const status = await connection.getSignatureStatus(signature);
-      if (status.value?.confirmationStatus === 'confirmed' || 
+      if (status.value?.confirmationStatus === 'confirmed' ||
           status.value?.confirmationStatus === 'finalized') {
         return true;
       }
-      if (status.value?.err) return false;
-    } catch {}
-    await new Promise(resolve => setTimeout(resolve, 1000));
+      if (status.value?.err) {
+        return false;
+      }
+    } catch (error) {
+      // Silently retry on RPC errors
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
   }
   return false;
-}
-
-async function createTestToken(connection: Connection, sourceWallet: Keypair): Promise<string | null> {
-  const provider = new AnchorProvider(connection, new Wallet(sourceWallet), { commitment: "confirmed" });
-  const sdk = new PumpFunSDK(provider);
-  const mint = Keypair.generate();
-  
-  try {
-    const blob = new Blob([Buffer.from([
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
-    ])], { type: 'image/png' });
-
-    await sdk.trade.createAndBuy(
-      sourceWallet,
-      mint,
-      { name: "DEMO", symbol: "DEMO", description: "Demo token", file: blob },
-      BigInt(0.0001 * LAMPORTS_PER_SOL),
-      500n,
-      { unitLimit: 250_000, unitPrice: 250_000 }
-    );
-
-    return mint.publicKey.toBase58();
-  } catch {
-    return null;
-  }
-}
-
-async function findPumpSwapPool(connection: Connection) {
-  const PUMPSWAP_PROGRAM_ID = new PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA');
-  const NATIVE_MINT = new PublicKey('So11111111111111111111111111111111111111112');
-  const MIN = PUMPSWAP_MIN_POOL * LAMPORTS_PER_SOL;
-  const MAX = PUMPSWAP_MAX_POOL * LAMPORTS_PER_SOL;
-
-  // Try to load from cache
-  try {
-    if (fs.existsSync(POOL_CACHE_FILE)) {
-      const cacheData = JSON.parse(fs.readFileSync(POOL_CACHE_FILE, 'utf-8'));
-      const cacheAge = Date.now() - cacheData.timestamp;
-
-      if (cacheAge < CACHE_MAX_AGE_MS) {
-        const poolPubkey = new PublicKey(cacheData.pool);
-        const baseMint = new PublicKey(cacheData.baseMint);
-        const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, poolPubkey, true);
-
-        const quoteInfo = await connection.getAccountInfo(poolQuoteTokenAccount);
-        if (quoteInfo) {
-          const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
-          if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
-            const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
-            return { pool: poolPubkey, baseMint, liquidity: quoteSol };
-          }
-        }
-      }
-    }
-  } catch {}
-  const accounts = await connection.getProgramAccounts(PUMPSWAP_PROGRAM_ID, {
-    filters: [{ dataSize: 300 }]
-  });
-
-  for (const { pubkey, account } of accounts) {
-    const discriminator = account.data.subarray(0, 8);
-    const expected = Buffer.from([241, 154, 109, 4, 17, 177, 109, 188]);
-    if (!discriminator.equals(expected)) continue;
-
-    const baseMintOffset = 8 + 1 + 2 + 32;
-    const baseMint = new PublicKey(account.data.subarray(baseMintOffset, baseMintOffset + 32));
-
-    try {
-      const poolBaseTokenAccount = getAssociatedTokenAddressSync(baseMint, pubkey, true);
-      const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, pubkey, true);
-      const [baseInfo, quoteInfo] = await connection.getMultipleAccountsInfo([
-        poolBaseTokenAccount,
-        poolQuoteTokenAccount
-      ]);
-
-      if (!baseInfo || !quoteInfo) continue;
-
-      const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
-      if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
-        const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
-
-        const cacheData = {
-          pool: pubkey.toBase58(),
-          baseMint: baseMint.toBase58(),
-          liquidity: quoteSol,
-          timestamp: Date.now()
-        };
-        fs.writeFileSync(POOL_CACHE_FILE, JSON.stringify(cacheData, null, 2));
-
-        return { pool: pubkey, baseMint, liquidity: quoteSol };
-      }
-    } catch {}
-  }
-  return null;
 }
 
 async function executeCycle(
@@ -211,29 +84,34 @@ async function executeCycle(
   
   let buyResult: TradeResult | null = null;
   let sellResult: TradeResult | null = null;
-  let tokensFromBuy: string | null = null;
 
   // BUY
   let buyError: string | undefined;
   const buyPromise = new Promise<TradeResult | null>((resolve) => {
-    let complete = false;
+    let processing = false;
     let sourceSignature: string | null = null;
 
     const handler = async (tx: any) => {
-      if (complete || tx.protocol !== protocol) return;
+      if (processing || tx.protocol !== protocol) return;
+      processing = true;  // Set synchronously before await
+
+      const parseStart = Date.now();
       const parseResult = parser.parse(tx);
 
       if (!parseResult.success) {
         if ('error' in parseResult) {
           buyError = parseResult.error;
-          complete = true;
           resolve(null);
+        } else {
+          processing = false;  // Reset if filtered
         }
         return; // Filtered or error
       }
 
-      if (parseResult.data.type !== 'BUY') return;
-      complete = true;
+      if (parseResult.data.type !== 'BUY') {
+        processing = false;  // Reset if wrong type
+        return;
+      }
 
       // Store the source signature from the detected transaction
       if (!sourceSignature) {
@@ -241,12 +119,11 @@ async function executeCycle(
       }
 
       const parsed = parseResult.data;
+      const parseEnd = Date.now();
+      const parsing = parseEnd - parseStart;
 
       try {
         const detection = tx.processedTimestamp - tx.receivedTimestamp;
-        const parseStart = Date.now();
-        const parseEnd = Date.now();
-        const parsing = parseEnd - parseStart;
 
         const buildResult = await builder.buildTransactionWithTiming(parsed);
         if (!buildResult.success || !buildResult.timing) {
@@ -289,86 +166,81 @@ async function executeCycle(
 
     // Execute source trade
     if (protocol === 'PUMP_FUN') {
-      const provider = new AnchorProvider(connection, new Wallet(sourceWallet), { commitment: "confirmed" });
-      const sdk = new PumpFunSDK(provider);
-      sdk.trade.buy(
+      executePumpFunBuy(
+        connection,
         sourceWallet,
         new PublicKey(testMint!),
-        BigInt(0.005 * LAMPORTS_PER_SOL),
-        500n,
-        { unitLimit: 300_000, unitPrice: 250_000 }
-      ).catch((err) => {
-        buyError = `Source transaction failed: ${err.message || err}`;
+        AMOUNTS.PUMP_FUN_BUY_SOL
+      ).then((sig) => {
+        sourceSignature = sig;
+      }).catch((error) => {
+        console.error(`Buy operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        buyError = `Source transaction failed: ${error instanceof Error ? error.message : error}`;
         resolve(null);
       });
     } else {
-      const onlineSdk = new OnlinePumpAmmSdk(connection);
-      onlineSdk.swapSolanaState(poolInfo.pool, sourceWallet.publicKey).then(async (swapState) => {
-        const buyInstructions = await PUMP_AMM_SDK.buyQuoteInput(
-          swapState,
-          new BN(Math.floor(PUMPSWAP_TRADE_AMOUNT * LAMPORTS_PER_SOL)),
-          10
-        );
-        const tx = new Transaction();
-        buyInstructions.forEach(ix => tx.add(ix));
-        const { blockhash } = await connection.getLatestBlockhash();
-        tx.recentBlockhash = blockhash;
-        tx.feePayer = sourceWallet.publicKey;
-        tx.sign(sourceWallet);
-        const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+      executePumpSwapBuy(
+        connection,
+        sourceWallet,
+        poolInfo.pool,
+        AMOUNTS.PUMP_SWAP_BUY_SOL
+      ).then((sig) => {
         sourceSignature = sig;
-        
-        const confirmed = await waitForConfirmation(connection, sig);
-        if (confirmed) {
-          try {
-            const userTokenAccount = getAssociatedTokenAddressSync(
-              poolInfo.baseMint,
-              sourceWallet.publicKey
-            );
-            const accountInfo = await connection.getAccountInfo(userTokenAccount);
-            if (accountInfo) {
-              tokensFromBuy = accountInfo.data.readBigUInt64LE(64).toString();
-            }
-          } catch {}
-        }
-      }).catch(() => resolve(null));
+      }).catch((error) => {
+        console.error(`Buy operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        resolve(null);
+      });
     }
 
     setTimeout(() => {
-      if (!complete) {
-        complete = true;
-        buyError = 'Timeout: No transaction detected after 15s';
+      if (!processing) {
+        processing = true;
+        buyError = `Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`;
         resolve(null);
       }
-    }, 15000);
+    }, TIMEOUTS.DETECTION_MS);
   });
 
   buyResult = await buyPromise;
   if (!buyResult) return { buy: null, sell: null, buyError, sellError: undefined };
 
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  // Wait for source buy transaction to confirm before executing sell
+  if (!buyResult.sourceSignature) {
+    return { buy: buyResult, sell: null, buyError, sellError: 'No source signature to wait for' };
+  }
+
+  const confirmed = await waitForConfirmation(connection, buyResult.sourceSignature);
+  if (!confirmed) {
+    return { buy: buyResult, sell: null, buyError, sellError: 'Source buy failed to confirm' };
+  }
 
   // SELL
   let sellError: string | undefined;
   const sellPromise = new Promise<TradeResult | null>((resolve) => {
-    let complete = false;
+    let processing = false;
     let sourceSignature: string | null = null;
 
     const handler = async (tx: any) => {
-      if (complete || tx.protocol !== protocol) return;
+      if (processing || tx.protocol !== protocol) return;
+      processing = true;  // Set synchronously before await
+
+      const parseStart = Date.now();
       const parseResult = parser.parse(tx);
 
       if (!parseResult.success) {
         if ('error' in parseResult) {
           sellError = parseResult.error;
-          complete = true;
           resolve(null);
+        } else {
+          processing = false;  // Reset if filtered
         }
         return; // Filtered or error
       }
 
-      if (parseResult.data.type !== 'SELL') return;
-      complete = true;
+      if (parseResult.data.type !== 'SELL') {
+        processing = false;  // Reset if wrong type
+        return;
+      }
 
       // Store the source signature from the detected transaction
       if (!sourceSignature) {
@@ -376,12 +248,11 @@ async function executeCycle(
       }
 
       const parsed = parseResult.data;
+      const parseEnd = Date.now();
+      const parsing = parseEnd - parseStart;
 
       try {
         const detection = tx.processedTimestamp - tx.receivedTimestamp;
-        const parseStart = Date.now();
-        const parseEnd = Date.now();
-        const parsing = parseEnd - parseStart;
 
         const buildResult = await builder.buildTransactionWithTiming(parsed);
         if (!buildResult.success || !buildResult.timing) {
@@ -421,51 +292,57 @@ async function executeCycle(
 
     // Execute source sell
     if (protocol === 'PUMP_FUN') {
-      const provider = new AnchorProvider(connection, new Wallet(sourceWallet), { commitment: "confirmed" });
-      const sdk = new PumpFunSDK(provider);
       connection.getTokenAccountsByOwner(
         sourceWallet.publicKey,
         { mint: new PublicKey(testMint!) }
       ).then(async (accounts) => {
         if (accounts.value.length === 0) return resolve(null);
         const balance = accounts.value[0].account.data.readBigUInt64LE(64);
-        await sdk.trade.sell(
+        if (balance === 0n) return resolve(null);
+
+        const sellAmount = (balance * BigInt(AMOUNTS.SELL_PERCENTAGE * 100)) / 100n;
+        await executePumpFunSell(
+          connection,
           sourceWallet,
           new PublicKey(testMint!),
-          balance,
-          500n,
-          { unitLimit: 300_000, unitPrice: 250_000 }
+          sellAmount
         );
-      }).catch((err) => {
-        sellError = `Source transaction failed: ${err.message || err}`;
+      }).catch((error) => {
+        console.error(`Sell operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        sellError = `Source transaction failed: ${error instanceof Error ? error.message : error}`;
         resolve(null);
       });
     } else {
-      const onlineSdk = new OnlinePumpAmmSdk(connection);
-      onlineSdk.swapSolanaState(poolInfo.pool, sourceWallet.publicKey).then(async (swapState) => {
-        const sellInstructions = await PUMP_AMM_SDK.sellBaseInput(
-          swapState,
-          new BN(tokensFromBuy || '0'),
-          10
+      connection.getTokenAccountsByOwner(
+        sourceWallet.publicKey,
+        { mint: poolInfo.baseMint }
+      ).then(async (accounts) => {
+        if (accounts.value.length === 0) return resolve(null);
+        const balance = accounts.value[0].account.data.readBigUInt64LE(64);
+        if (balance === 0n) return resolve(null);
+
+        const sellAmount = (balance * BigInt(AMOUNTS.SELL_PERCENTAGE * 100)) / 100n;
+        const sig = await executePumpSwapSell(
+          connection,
+          sourceWallet,
+          poolInfo.pool,
+          sellAmount.toString()
         );
-        const tx = new Transaction();
-        sellInstructions.forEach(ix => tx.add(ix));
-        const { blockhash } = await connection.getLatestBlockhash();
-        tx.recentBlockhash = blockhash;
-        tx.feePayer = sourceWallet.publicKey;
-        tx.sign(sourceWallet);
-        const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
         sourceSignature = sig;
-      }).catch(() => resolve(null));
+      }).catch((error) => {
+        console.error(`Sell operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        sellError = `Source transaction failed: ${error instanceof Error ? error.message : error}`;
+        resolve(null);
+      });
     }
 
     setTimeout(() => {
-      if (!complete) {
-        complete = true;
-        sellError = 'Timeout: No transaction detected after 15s';
+      if (!processing) {
+        processing = true;
+        sellError = `Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`;
         resolve(null);
       }
-    }, 15000);
+    }, TIMEOUTS.DETECTION_MS);
   });
 
   sellResult = await sellPromise;
@@ -531,53 +408,17 @@ async function main() {
   // Wait for Laserstream connection to stabilize
   await new Promise(resolve => setTimeout(resolve, 5000));
 
-  // Warmup phase to reduce first transaction latency
-  process.stdout.write('Warming up SDK and RPC connections... ');
-  try {
-    // Warmup RPC connection
-    await connection.getLatestBlockhash();
-
-    // Warmup getAssociatedTokenAddress (used in every transaction)
-    const dummyMint = new PublicKey('11111111111111111111111111111111');
-    getAssociatedTokenAddressSync(dummyMint, pumpFunBuilder.getBotKeypair().publicKey);
-
-    // Warmup PumpFun SDK instruction building
-    const dummyBondingCurve = pumpFunBuilder['sdk'].pda.getBondingCurvePDA(dummyMint);
-    const dummyAssociated = getAssociatedTokenAddressSync(dummyMint, pumpFunBuilder.getBotKeypair().publicKey);
-    await pumpFunBuilder['sdk'].program.methods
-      .buy(new BN(1000), new BN(1100))
-      .accounts({
-        global: pumpFunBuilder['sdk'].pda.getGlobalAccountPda(),
-        feeRecipient: pumpFunBuilder['globalAccount'].feeRecipient,
-        mint: dummyMint,
-        bondingCurve: dummyBondingCurve,
-        associatedBondingCurve: dummyAssociated,
-        associatedUser: dummyAssociated,
-        user: pumpFunBuilder.getBotKeypair().publicKey,
-        creatorVault: pumpFunBuilder['sdk'].pda.getCreatorVaultPda(pumpFunBuilder.getBotKeypair().publicKey),
-        eventAuthority: pumpFunBuilder['sdk'].pda.getEventAuthorityPda(),
-        globalVolumeAccumulator: pumpFunBuilder['sdk'].pda.getGlobalVolumeAccumulatorPda(),
-        userVolumeAccumulator: pumpFunBuilder['sdk'].pda.getUserVolumeAccumulatorPda(pumpFunBuilder.getBotKeypair().publicKey),
-        feeConfig: pumpFunBuilder['sdk'].pda.getPumpFeeConfigPda(),
-      })
-      .instruction();
-
-    console.log('Done');
-  } catch {
-    console.log('Failed (non-critical)');
-  }
-
   const pendingConfirmations: PendingConfirmation[] = [];
   const failedTrades: FailedTrade[] = [];
 
   // PUMP.FUN
   console.log('\n' + '━'.repeat(60));
-  console.log(`\nPUMP.FUN TEST (${NUM_CYCLES} cycles)\n`);
+  console.log(`\nPUMP.FUN TEST (${DEFAULTS.NUM_CYCLES} cycles)\n`);
 
   const pumpFunBuys: TradeResult[] = [];
   const pumpFunSells: TradeResult[] = [];
 
-  for (let i = 1; i <= NUM_CYCLES; i++) {
+  for (let i = 1; i <= DEFAULTS.NUM_CYCLES; i++) {
     process.stdout.write(`Cycle ${i}: `);
     const result = await executeCycle(
       'PUMP_FUN', i, connection, sourceWallet, detector, parser,
@@ -650,16 +491,16 @@ async function main() {
       });
     }
 
-    if (i < NUM_CYCLES) await new Promise(resolve => setTimeout(resolve, 1000));
+    if (i < DEFAULTS.NUM_CYCLES) await new Promise(resolve => setTimeout(resolve, 1000));
   }
 
   // PUMPSWAP
-  console.log(`\nPUMPSWAP TEST (${NUM_CYCLES} cycles)\n`);
+  console.log(`\nPUMPSWAP TEST (${DEFAULTS.NUM_CYCLES} cycles)\n`);
 
   const pumpSwapBuys: TradeResult[] = [];
   const pumpSwapSells: TradeResult[] = [];
 
-  for (let i = 1; i <= NUM_CYCLES; i++) {
+  for (let i = 1; i <= DEFAULTS.NUM_CYCLES; i++) {
     process.stdout.write(`Cycle ${i}: `);
     const result = await executeCycle(
       'PUMP_SWAP', i, connection, sourceWallet, detector, parser,
@@ -732,7 +573,7 @@ async function main() {
       });
     }
 
-    if (i < NUM_CYCLES) await new Promise(resolve => setTimeout(resolve, 1000));
+    if (i < DEFAULTS.NUM_CYCLES) await new Promise(resolve => setTimeout(resolve, 1000));
   }
 
   // Wait for all confirmations
@@ -777,8 +618,8 @@ async function main() {
 
   const pfBuyStats = calculateStats(pumpFunBuys.map(r => r.latency));
   const pfSellStats = calculateStats(pumpFunSells.map(r => r.latency));
-  const pfBuyBlockStats = calculateStats(pfBuyBlocks);
-  const pfSellBlockStats = calculateStats(pfSellBlocks);
+  const pfBuyBlockStats = calculateStatsWithDecimal(pfBuyBlocks);
+  const pfSellBlockStats = calculateStatsWithDecimal(pfSellBlocks);
 
   console.log(`PUMP.FUN (${pumpFunBuys.length} buys, ${pumpFunSells.length} sells)`);
   console.log('                   Processing Time (ms)         Block Distance (blks)');
@@ -788,8 +629,8 @@ async function main() {
 
   const psBuyStats = calculateStats(pumpSwapBuys.map(r => r.latency));
   const psSellStats = calculateStats(pumpSwapSells.map(r => r.latency));
-  const psBuyBlockStats = calculateStats(psBuyBlocks);
-  const psSellBlockStats = calculateStats(psSellBlocks);
+  const psBuyBlockStats = calculateStatsWithDecimal(psBuyBlocks);
+  const psSellBlockStats = calculateStatsWithDecimal(psSellBlocks);
 
   console.log(`\nPUMPSWAP (${pumpSwapBuys.length} buys, ${pumpSwapSells.length} sells)`);
   console.log('                   Processing Time (ms)         Block Distance (blks)');
@@ -804,7 +645,7 @@ async function main() {
   const buildingStats = calculateStats(allBuys.map(r => r.building));
   const executionStats = calculateStats(allBuys.map(r => r.execution));
   const totalStats = calculateStats(allBuys.map(r => r.latency));
-  const totalBlockStats = calculateStats([...pfBuyBlocks, ...psBuyBlocks]);
+  const totalBlockStats = calculateStatsWithDecimal([...pfBuyBlocks, ...psBuyBlocks]);
 
   console.log(`\nLATENCY BREAKDOWN (${allBuys.length} buy operations)`);
   console.log('                       ' + 'p50'.padStart(7) + '    ' + 'p95'.padStart(7) + '    ' + 'avg'.padStart(7));
@@ -816,7 +657,7 @@ async function main() {
   console.log(`  Block Distance       ${(String(totalBlockStats.p50) + 'blks').padStart(7)}    ${(String(totalBlockStats.p95) + 'blks').padStart(7)}    ${(totalBlockStats.avg.toFixed(1) + 'blks').padStart(7)}`);
 
   const totalOps = pumpFunBuys.length + pumpFunSells.length + pumpSwapBuys.length + pumpSwapSells.length;
-  const expectedOps = NUM_CYCLES * 4;
+  const expectedOps = DEFAULTS.NUM_CYCLES * 4;
   const elapsedMin = Math.floor((Date.now() - startTime) / 60000);
   const elapsedSec = Math.floor(((Date.now() - startTime) % 60000) / 1000);
 
@@ -836,6 +677,11 @@ async function main() {
 process.on('SIGINT', () => {
   console.log('\nDemo interrupted');
   process.exit(0);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error);
+  process.exit(1);
 });
 
 main().catch((error) => {

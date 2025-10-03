@@ -417,6 +417,12 @@ export class PumpSwapTxBuilder {
         throw new Error(`Zero token balance - bot wallet has no tokens to sell (mint: ${baseMint.toBase58()})`);
       }
 
+      // Calculate sell amount (50% of balance)
+      const sellAmount = tokenBalance.divn(2);
+      if (sellAmount.isZero()) {
+        throw new Error(`Sell amount too small - 50% of balance is zero (balance: ${tokenBalance.toString()})`);
+      }
+
       if (!poolInfo) {
         throw new Error(`Pool account not found - pool may be closed (pool: ${poolPubkey.toBase58()})`);
       }
@@ -437,7 +443,7 @@ export class PumpSwapTxBuilder {
     const globalConfig = PUMP_AMM_SDK.decodeGlobalConfig(globalConfigInfo);
     const feeConfig = feeConfigInfo ? PUMP_AMM_SDK.decodeFeeConfig(feeConfigInfo) : null;
     const baseMintAccount = MintLayout.decode(baseMintInfo.data);
-    
+
     const poolBaseAmount = new BN(
       AccountLayout.decode(poolBaseAccountInfo.data).amount.toString()
     );
@@ -447,7 +453,7 @@ export class PumpSwapTxBuilder {
 
     const t2 = Date.now();
     const { minQuote } = sellBaseInput({
-      base: tokenBalance,
+      base: sellAmount,
       slippage,
       baseReserve: poolBaseAmount,
       quoteReserve: poolQuoteAmount,
@@ -505,7 +511,7 @@ export class PumpSwapTxBuilder {
     );
 
     const sellIx = await this.program.methods
-      .sell(tokenBalance, minQuote)
+      .sell(sellAmount, minQuote)
       .accounts({
         pool: poolPubkey,
         globalConfig: GLOBAL_CONFIG_PDA,

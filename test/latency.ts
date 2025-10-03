@@ -1,19 +1,21 @@
 import 'dotenv/config';
-import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL, Transaction } from '@solana/web3.js';
-import { getAssociatedTokenAddressSync } from '@solana/spl-token';
-import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
-import { PumpFunSDK } from '../src/pumpfun-sdk';
-import { OnlinePumpAmmSdk, PUMP_AMM_SDK } from '@pump-fun/pump-swap-sdk';
+import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Detector } from '../src/detector';
 import { TradeParser } from '../src/parser';
 import { PumpFunTxBuilder } from '../src/pumpfun-tx';
 import { PumpSwapTxBuilder } from '../src/pumpswap-tx';
 import { TransactionExecutor } from '../src/executor';
 import { appConfig } from '../src/config/config';
+import {
+  calculateStats,
+  calculateStatsWithDecimal,
+  getTransactionSlot,
+  findPumpSwapPool,
+  createTestToken,
+  executePumpFunBuy,
+  executePumpSwapBuy
+} from '../src/utils/test-utils';
 import bs58 from 'bs58';
-import BN from 'bn.js';
-import fs from 'fs';
-import path from 'path';
 
 const DEFAULT_OPERATIONS = 20;
 const NUM_OPERATIONS = parseInt(
@@ -24,10 +26,6 @@ const SDK_OPERATIONS = parseInt(
   process.argv.find(arg => arg.startsWith('--sdk-operations='))?.split('=')[1] || String(DEFAULT_SDK_OPERATIONS)
 );
 const PUMPSWAP_TRADE_AMOUNT = 0.002;
-const PUMPSWAP_MIN_POOL = 20;
-const PUMPSWAP_MAX_POOL = 100;
-const POOL_CACHE_FILE = path.join(__dirname, '../data/pumpswap-pool.json');
-const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 interface TimingData {
   detection: number;
@@ -47,16 +45,6 @@ interface FailedOperation {
   operationNum: number;
   protocol: string;
   error: string;
-}
-
-function calculateStats(values: number[]): { p50: number; p95: number; avg: number } {
-  if (values.length === 0) return { p50: 0, p95: 0, avg: 0 };
-  const sorted = [...values].sort((a, b) => a - b);
-  return {
-    p50: sorted[Math.floor(sorted.length * 0.5)],
-    p95: sorted[Math.floor(sorted.length * 0.95)],
-    avg: sorted.reduce((sum, v) => sum + v, 0) / sorted.length
-  };
 }
 
 function createProgressBar(current: number, total: number, label: string): void {
@@ -80,125 +68,6 @@ function createProgressBar(current: number, total: number, label: string): void 
   }
 }
 
-async function getTransactionSlot(
-  connection: Connection,
-  signature: string,
-  timeoutMs: number = 60000
-): Promise<number | null> {
-  const startTime = Date.now();
-
-  while (Date.now() - startTime < timeoutMs) {
-    try {
-      const tx = await connection.getTransaction(signature, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0
-      });
-
-      if (tx?.slot) {
-        return tx.slot;
-      }
-    } catch {}
-
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-
-  return null;
-}
-
-async function createTestToken(connection: Connection, sourceWallet: Keypair): Promise<string | null> {
-  const provider = new AnchorProvider(connection, new Wallet(sourceWallet), { commitment: "confirmed" });
-  const sdk = new PumpFunSDK(provider);
-  const mint = Keypair.generate();
-
-  try {
-    const blob = new Blob([Buffer.from([
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
-    ])], { type: 'image/png' });
-
-    await sdk.trade.createAndBuy(
-      sourceWallet,
-      mint,
-      { name: "BENCH", symbol: "BENCH", description: "Benchmark token", file: blob },
-      BigInt(0.0001 * LAMPORTS_PER_SOL),
-      500n,
-      { unitLimit: 250_000, unitPrice: 250_000 }
-    );
-
-    return mint.publicKey.toBase58();
-  } catch {
-    return null;
-  }
-}
-
-async function findPumpSwapPool(connection: Connection) {
-  const PUMPSWAP_PROGRAM_ID = new PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA');
-  const NATIVE_MINT = new PublicKey('So11111111111111111111111111111111111111112');
-  const MIN = PUMPSWAP_MIN_POOL * LAMPORTS_PER_SOL;
-  const MAX = PUMPSWAP_MAX_POOL * LAMPORTS_PER_SOL;
-
-  try {
-    if (fs.existsSync(POOL_CACHE_FILE)) {
-      const cacheData = JSON.parse(fs.readFileSync(POOL_CACHE_FILE, 'utf-8'));
-      const cacheAge = Date.now() - cacheData.timestamp;
-
-      if (cacheAge < CACHE_MAX_AGE_MS) {
-        const poolPubkey = new PublicKey(cacheData.pool);
-        const baseMint = new PublicKey(cacheData.baseMint);
-        const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, poolPubkey, true);
-
-        const quoteInfo = await connection.getAccountInfo(poolQuoteTokenAccount);
-        if (quoteInfo) {
-          const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
-          if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
-            const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
-            return { pool: poolPubkey, baseMint, liquidity: quoteSol };
-          }
-        }
-      }
-    }
-  } catch {}
-
-  const accounts = await connection.getProgramAccounts(PUMPSWAP_PROGRAM_ID, {
-    filters: [{ dataSize: 300 }]
-  });
-
-  for (const { pubkey, account } of accounts) {
-    const discriminator = account.data.subarray(0, 8);
-    const expected = Buffer.from([241, 154, 109, 4, 17, 177, 109, 188]);
-    if (!discriminator.equals(expected)) continue;
-
-    const baseMintOffset = 8 + 1 + 2 + 32;
-    const baseMint = new PublicKey(account.data.subarray(baseMintOffset, baseMintOffset + 32));
-
-    try {
-      const poolBaseTokenAccount = getAssociatedTokenAddressSync(baseMint, pubkey, true);
-      const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, pubkey, true);
-      const [baseInfo, quoteInfo] = await connection.getMultipleAccountsInfo([
-        poolBaseTokenAccount,
-        poolQuoteTokenAccount
-      ]);
-
-      if (!baseInfo || !quoteInfo) continue;
-
-      const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
-      if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
-        const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
-
-        const cacheData = {
-          pool: pubkey.toBase58(),
-          baseMint: baseMint.toBase58(),
-          liquidity: quoteSol,
-          timestamp: Date.now()
-        };
-        fs.writeFileSync(POOL_CACHE_FILE, JSON.stringify(cacheData, null, 2));
-
-        return { pool: pubkey, baseMint, liquidity: quoteSol };
-      }
-    } catch {}
-  }
-  return null;
-}
-
 async function executeBenchmarkOperation(
   protocol: 'PUMP_FUN' | 'PUMP_SWAP',
   connection: Connection,
@@ -211,22 +80,27 @@ async function executeBenchmarkOperation(
   poolInfo: any
 ): Promise<{ timing: TimingData | null; sourceSignature: string | null; copySignature: string | null; error?: string }> {
   return new Promise((resolve) => {
-    let complete = false;
+    let processing = false;
     let sourceSignature: string | null = null;
 
     const handler = async (tx: any) => {
-      if (complete || tx.protocol !== protocol) return;
+      if (processing || tx.protocol !== protocol) return;
+      processing = true;  // Set synchronously before await
       const parseResult = parser.parse(tx);
 
       if (!parseResult.success) {
         if ('error' in parseResult) {
           resolve({ timing: null, sourceSignature, copySignature: null, error: parseResult.error });
+        } else {
+          processing = false;  // Reset if filtered
         }
         return; // Filtered or error
       }
 
-      if (parseResult.data.type !== 'BUY') return;
-      complete = true;
+      if (parseResult.data.type !== 'BUY') {
+        processing = false;  // Reset if wrong type
+        return;
+      }
 
       // Remove handler immediately to prevent duplicate execution
       detector.clearTransactionHandler();
@@ -290,7 +164,10 @@ async function executeBenchmarkOperation(
         BigInt(0.005 * LAMPORTS_PER_SOL),
         500n,
         { unitLimit: 250_000, unitPrice: 250_000 }
-      ).catch(() => resolve({ timing: null, sourceSignature: null, copySignature: null }));
+      ).catch((error) => {
+        console.error(`Operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        resolve({ timing: null, sourceSignature: null, copySignature: null });
+      });
     } else {
       const onlineSdk = new OnlinePumpAmmSdk(connection);
       onlineSdk.swapSolanaState(poolInfo.pool, sourceWallet.publicKey).then(async (swapState) => {
@@ -307,12 +184,15 @@ async function executeBenchmarkOperation(
         tx.sign(sourceWallet);
         const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
         sourceSignature = sig;
-      }).catch(() => resolve({ timing: null, sourceSignature: null, copySignature: null }));
+      }).catch((error) => {
+        console.error(`Operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        resolve({ timing: null, sourceSignature: null, copySignature: null });
+      });
     }
 
     setTimeout(() => {
-      if (!complete) {
-        complete = true;
+      if (!processing) {
+        processing = true;
         detector.clearTransactionHandler();
         resolve({ timing: null, sourceSignature, copySignature: null, error: 'Timeout: No transaction detected after 15s' });
       }
@@ -345,7 +225,10 @@ async function executeSDKNativeOperation(
           const latency = Date.now() - startTime;
           resolve({ latency, signature: result.signature || null });
         })
-        .catch(() => resolve({ latency: null, signature: null }));
+        .catch((error) => {
+          console.error(`Operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          resolve({ latency: null, signature: null });
+        });
     } else {
       const onlineSdk = new OnlinePumpAmmSdk(connection);
 
@@ -366,7 +249,10 @@ async function executeSDKNativeOperation(
           const latency = Date.now() - startTime;
           resolve({ latency, signature: sig });
         })
-        .catch(() => resolve({ latency: null, signature: null }));
+        .catch((error) => {
+          console.error(`Operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          resolve({ latency: null, signature: null });
+        });
     }
 
     setTimeout(() => resolve({ latency: null, signature: null }), 15000);
@@ -578,7 +464,7 @@ async function main() {
   const pfSubmission = calculateStats(pumpFunTimings.map(t => t.submission));
   const pfExecutionTotal = calculateStats(pumpFunTimings.map(t => t.executionTotal));
   const pfProcessingTime = calculateStats(pumpFunTimings.map(t => t.processingTime));
-  const pfBlockDistance = calculateStats(pumpFunTimings.filter(t => t.blockDistance !== undefined).map(t => t.blockDistance!));
+  const pfBlockDistance = calculateStatsWithDecimal(pumpFunTimings.filter(t => t.blockDistance !== undefined).map(t => t.blockDistance!));
 
   console.log('                       ' + 'p50'.padStart(7) + '    ' + 'p95'.padStart(7) + '    ' + 'avg'.padStart(7));
   console.log(`  Detection            ${String(pfDetection.p50).padStart(5)}ms    ${String(pfDetection.p95).padStart(5)}ms    ${String(Math.round(pfDetection.avg)).padStart(5)}ms`);
@@ -608,7 +494,7 @@ async function main() {
   const psSubmission = calculateStats(pumpSwapTimings.map(t => t.submission));
   const psExecutionTotal = calculateStats(pumpSwapTimings.map(t => t.executionTotal));
   const psProcessingTime = calculateStats(pumpSwapTimings.map(t => t.processingTime));
-  const psBlockDistance = calculateStats(pumpSwapTimings.filter(t => t.blockDistance !== undefined).map(t => t.blockDistance!));
+  const psBlockDistance = calculateStatsWithDecimal(pumpSwapTimings.filter(t => t.blockDistance !== undefined).map(t => t.blockDistance!));
 
   console.log('                       ' + 'p50'.padStart(7) + '    ' + 'p95'.padStart(7) + '    ' + 'avg'.padStart(7));
   console.log(`  Detection            ${String(psDetection.p50).padStart(5)}ms    ${String(psDetection.p95).padStart(5)}ms    ${String(Math.round(psDetection.avg)).padStart(5)}ms`);
@@ -631,7 +517,7 @@ async function main() {
 
   const allTimings = [...pumpFunTimings, ...pumpSwapTimings];
   const totalProcessingTime = calculateStats(allTimings.map(t => t.processingTime));
-  const totalBlockDistance = calculateStats(allTimings.filter(t => t.blockDistance !== undefined).map(t => t.blockDistance!));
+  const totalBlockDistance = calculateStatsWithDecimal(allTimings.filter(t => t.blockDistance !== undefined).map(t => t.blockDistance!));
 
   console.log('BOT PERFORMANCE:');
   console.log('                       ' + 'p50'.padStart(7) + '    ' + 'p95'.padStart(7) + '    ' + 'avg'.padStart(7));
@@ -681,6 +567,11 @@ async function main() {
 process.on('SIGINT', () => {
   console.log('\nBenchmark interrupted');
   process.exit(0);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error);
+  process.exit(1);
 });
 
 main().catch((error) => {

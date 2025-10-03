@@ -300,19 +300,25 @@ export class PumpFunTxBuilder {
 
     const bondingCreator = new PublicKey(bondingCurveAccount.creator);
 
+    // Calculate sell amount (50% of balance)
+    const sellAmount = (tokenBalance * 50n) / 100n;
+    if (sellAmount === 0n) {
+      throw new Error(`Sell amount too small - 50% of balance is zero (balance: ${tokenBalance.toString()})`);
+    }
+
     // Calculate minimum SOL to receive with slippage
     const t2 = Date.now();
     const minSolOutput = bondingCurveAccount.getSellPrice(
       this.globalAccount,
       this.feeConfig,
-      BigInt(tokenBalance.toString())
+      BigInt(sellAmount.toString())
     );
     const minSolWithSlippage = minSolOutput - (minSolOutput * slippageBasisPoints / 10000n);
     timing.calculateAmount = Date.now() - t2;
 
     const t3 = Date.now();
     const transaction = new Transaction();
-    
+
     const bondingCurve = bondingCurvePDA;
     const associatedBonding = await getAssociatedTokenAddress(
       mint,
@@ -325,7 +331,7 @@ export class PumpFunTxBuilder {
     const eventAuthority = this.sdk.pda.getEventAuthorityPda();
 
     const ix = await this.sdk.program.methods
-      .sell(new BN(tokenBalance.toString()), new BN(minSolWithSlippage.toString()))
+      .sell(new BN(sellAmount.toString()), new BN(minSolWithSlippage.toString()))
       .accounts({
         global: globalAccountPDA,
         feeRecipient: this.globalAccount.feeRecipient,
