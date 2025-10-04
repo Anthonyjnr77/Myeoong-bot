@@ -49,13 +49,21 @@ async function main() {
 
   const connection = new Connection(appConfig.rpc.endpoint, { commitment: appConfig.rpc.commitment });
 
-  if (!appConfig.testing?.sourceWalletPrivateKey) {
+  if (!appConfig.testing?.sourceWalletPrivateKey || appConfig.testing.sourceWalletPrivateKey.trim() === '') {
     console.error('SOURCE_WALLET_PRIVATE_KEY required for demo');
     process.exit(1);
   }
 
-  const sourceWallet = Keypair.fromSecretKey(bs58.decode(appConfig.testing.sourceWalletPrivateKey));
-  const botKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.wallet.privateKey));
+  let sourceWallet: Keypair;
+  let botKeypair: Keypair;
+
+  try {
+    sourceWallet = Keypair.fromSecretKey(bs58.decode(appConfig.testing.sourceWalletPrivateKey));
+    botKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.wallet.privateKey));
+  } catch (error: any) {
+    console.error('Invalid wallet private key format:', error.message);
+    process.exit(1);
+  }
 
   const bot = new CopytradingBot({
     mode: 'live',

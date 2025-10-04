@@ -227,12 +227,12 @@ async function main() {
   if (hasSell && command === 'sell') {
     if (protocol === 'pumpfun' && !tokenArg) {
       console.error('\n✗ Sell requires --token for pump.fun');
-      console.error('  Example: npm run trades -- sell --token=YOUR_TOKEN\n');
+      console.error('  Example: pnpm trades sell --token=YOUR_TOKEN\n');
       process.exit(1);
     }
     if (protocol === 'pumpswap' && !poolArg) {
       console.error('\n✗ Sell requires --pool for PumpSwap');
-      console.error('  Example: npm run trades -- sell --pumpswap --pool=YOUR_POOL\n');
+      console.error('  Example: pnpm trades sell --pumpswap --pool=YOUR_POOL\n');
       process.exit(1);
     }
   }
