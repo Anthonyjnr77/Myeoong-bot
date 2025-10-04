@@ -109,9 +109,15 @@ async function validatePrivateKeys(): Promise<ValidationResult[]> {
   }
 
   // Validate source wallet private key (optional)
-  if (process.env.SOURCE_WALLET_PRIVATE_KEY) {
+  // Common placeholder values
+  const placeholders = ['your_source_wallet_base58_private_key', 'your_'];
+
+  const sourceKeySet = process.env.SOURCE_WALLET_PRIVATE_KEY &&
+                       !placeholders.some(ph => process.env.SOURCE_WALLET_PRIVATE_KEY!.includes(ph));
+
+  if (sourceKeySet) {
     try {
-      const decoded = bs58.decode(process.env.SOURCE_WALLET_PRIVATE_KEY);
+      const decoded = bs58.decode(process.env.SOURCE_WALLET_PRIVATE_KEY!);
       if (decoded.length !== 64) {
         throw new Error('Invalid length (should be 64 bytes)');
       }
@@ -331,14 +337,20 @@ async function validateWalletBalances(): Promise<ValidationResult[]> {
   }
 
   // Validate source wallet balance (optional)
-  if (process.env.SOURCE_WALLET_PRIVATE_KEY) {
+  // Common placeholder values
+  const placeholders = ['your_source_wallet_base58_private_key', 'your_'];
+
+  const sourceKeySet = process.env.SOURCE_WALLET_PRIVATE_KEY &&
+                       !placeholders.some(ph => process.env.SOURCE_WALLET_PRIVATE_KEY!.includes(ph));
+
+  if (sourceKeySet) {
     try {
       if (!process.env.HELIUS_RPC_ENDPOINT) {
         throw new Error('Missing RPC configuration');
       }
 
       const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT);
-      const keypair = Keypair.fromSecretKey(bs58.decode(process.env.SOURCE_WALLET_PRIVATE_KEY));
+      const keypair = Keypair.fromSecretKey(bs58.decode(process.env.SOURCE_WALLET_PRIVATE_KEY!));
       const balance = await connection.getBalance(keypair.publicKey);
       const balanceSol = balance / 1e9;
 
@@ -384,6 +396,27 @@ async function validateConfigSystem(): Promise<ValidationResult> {
       solution: 'Check config/default.json for syntax errors'
     };
   }
+}
+
+async function validateTestingCapability(): Promise<ValidationResult> {
+  // Common placeholder values
+  const placeholders = ['your_source_wallet_base58_private_key', 'your_'];
+
+  const sourceKeySet = process.env.SOURCE_WALLET_PRIVATE_KEY &&
+                       !placeholders.some(ph => process.env.SOURCE_WALLET_PRIVATE_KEY!.includes(ph));
+
+  if (!sourceKeySet) {
+    return {
+      passed: true,
+      message: 'Testing scripts unavailable (SOURCE_WALLET_PRIVATE_KEY not configured)',
+      solution: 'Set SOURCE_WALLET_PRIVATE_KEY in .env to run demo/latency/trades scripts'
+    };
+  }
+
+  return {
+    passed: true,
+    message: 'Testing scripts available'
+  };
 }
 
 async function validateTokenAccountCreation(): Promise<ValidationResult> {
@@ -459,6 +492,9 @@ function printResults(category: string, results: ValidationResult[]): boolean {
       if (result.solution) {
         console.log(`    Solution: ${result.solution}`);
       }
+    } else if (result.solution) {
+      // Warning: passed but has additional info
+      console.log(`    ${result.solution}`);
     }
   }
 
@@ -517,7 +553,8 @@ async function main() {
 
   const configResult = await validateConfigSystem();
   const tokenResult = await validateTokenAccountCreation();
-  if (!printResults('Functionality', [configResult, tokenResult])) {
+  const testingResult = await validateTestingCapability();
+  if (!printResults('Functionality', [configResult, tokenResult, testingResult])) {
     overallPassed = false;
   }
 
