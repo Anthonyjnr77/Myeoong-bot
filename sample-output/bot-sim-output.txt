@@ -8,8 +8,8 @@
 ℹ️  Using configured source wallet
 
 Mode:        SIMULATE
-Wallets:     GQBd...QriN (1 total)
-Bot Wallet:  2i4U...Lkmr (18.39 SOL)
+Wallets:     7xKX...9z3M (1 total)
+Bot Wallet:  5rYt...3pQw (18.39 SOL)
 Protocols:   pump.fun ✓  PumpSwap ✓
 Log File:    ./logs/bot-2025-10-04T14-17-06.log
 
@@ -17,7 +17,7 @@ Log File:    ./logs/bot-2025-10-04T14-17-06.log
 Listening for trades...
 
 Starting detector
-Watching wallets: GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN
+Watching wallets: 7xKXfZz8mVq2YHRkLpN4cTuWxBvD3hG9fKpEzJ8a9z3M
 pump.fun enabled: true
 PumpSwap enabled: true
 Stream subscribed successfully
