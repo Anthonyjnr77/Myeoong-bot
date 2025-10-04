@@ -1,3 +1,5 @@
+// Suppress bigint warning
+process.env.NODE_NO_WARNINGS = '1';
 import 'dotenv/config';
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { appConfig } from '../src/config/config';

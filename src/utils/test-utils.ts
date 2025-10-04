@@ -175,11 +175,6 @@ export async function findPumpSwapPool(
         const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
         const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
 
-        // Log pool liquidity for debugging
-        if (scanned <= 200) {
-          console.log(`Pool ${scanned}: ${quoteSol.toFixed(2)} SOL (range: ${MIN / LAMPORTS_PER_SOL}-${MAX / LAMPORTS_PER_SOL})`);
-        }
-
         if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
 
           // Save to cache

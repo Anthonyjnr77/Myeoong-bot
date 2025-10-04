@@ -1,3 +1,5 @@
+// Suppress bigint warning
+process.env.NODE_NO_WARNINGS = '1';
 import 'dotenv/config';
 
 // Enable silent mode for error logging during tests

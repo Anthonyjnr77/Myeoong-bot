@@ -1,3 +1,5 @@
+// Suppress bigint warning
+process.env.NODE_NO_WARNINGS = '1';
 import 'dotenv/config';
 import { Connection, Keypair } from '@solana/web3.js';
 import { CopytradingBot } from '../src/bot/CopytradingBot';
