@@ -250,8 +250,12 @@ export async function createTestToken(
     );
 
     if (!result.success) {
-      console.error('Token creation failed:', result.error);
-      return undefined;
+      const errorMsg = result.error instanceof Error
+        ? result.error.message
+        : typeof result.error === 'string'
+        ? result.error
+        : JSON.stringify(result.error);
+      throw new Error(`Token creation transaction failed: ${errorMsg}`);
     }
 
     // Verify bonding curve exists before returning
