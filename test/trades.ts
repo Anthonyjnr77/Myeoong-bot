@@ -14,7 +14,7 @@ import { SourceTradeExecutor } from '../src/bot/test/SourceTradeExecutor';
 import bs58 from 'bs58';
 
 // CLI parsing
-const args = process.argv.slice(2);
+const args = process.argv.slice(2).filter(arg => arg !== '--');
 const command = args[0] || 'buysell';
 const tokenArg = args.find(a => a.startsWith('--token=') || a.startsWith('-t='))?.split('=')[1];
 const poolArg = args.find(a => a.startsWith('--pool=') || a.startsWith('-p='))?.split('=')[1];
@@ -56,7 +56,7 @@ function showHelp() {
   console.log(`
 TRADE GENERATOR
 
-Usage: npm run trades -- [pattern] [options]
+Usage: pnpm trades [pattern] [options]
 
 PATTERNS:
   buy       - Single buy
@@ -72,16 +72,15 @@ OPTIONS:
   --amount=0.01                     (SOL amount for buys only)
 
 EXAMPLES:
-  npm run trades -- buy                              (pump.fun buy, creates token)
-  npm run trades -- buy --pumpfun --amount=0.05      (pump.fun buy 0.05 SOL)
-  npm run trades -- buy --pumpswap                   (PumpSwap buy, finds pool)
-  npm run trades -- sell --token=7YPL...3mK8         (pump.fun sell token)
-  npm run trades -- sell --pool=Pool9xKm...          (PumpSwap sell from pool)
-  npm run trades -- buysell --pumpswap               (PumpSwap buy then sell)
+  pnpm trades buy                              (pump.fun buy, creates token)
+  pnpm trades buy --pumpfun --amount=0.05      (pump.fun buy 0.05 SOL)
+  pnpm trades buy --pumpswap                   (PumpSwap buy, finds pool)
+  pnpm trades sell --token=7YPL...3mK8         (pump.fun sell token)
+  pnpm trades sell --pool=Pool9xKm...          (PumpSwap sell from pool)
+  pnpm trades buysell --pumpswap               (PumpSwap buy then sell)
 
 NOTES:
   - Sells always sell the percentage defined in config (SELL_PERCENTAGE)
-  - The '--' is required to pass arguments through npm
   - If no protocol specified, defaults to pump.fun
 `);
 }
