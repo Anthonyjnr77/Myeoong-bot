@@ -20,12 +20,30 @@ async function validateEnvironmentVariables(): Promise<ValidationResult[]> {
     'BOT_WALLET_PRIVATE_KEY'
   ];
 
+  // Common placeholder values that indicate .env wasn't properly configured
+  const placeholders = [
+    'your_helius_api_key_here',
+    'your_api_key_here',
+    'your_base58_encoded_private_key_here',
+    'your_source_wallet_base58_private_key',
+    'wallet1_address',
+    'wallet2_address'
+  ];
+
   for (const varName of required) {
-    if (!process.env[varName]) {
+    const value = process.env[varName];
+
+    if (!value) {
       results.push({
         passed: false,
         message: varName,
         solution: `Set ${varName} in .env file`
+      });
+    } else if (placeholders.some(ph => value.includes(ph))) {
+      results.push({
+        passed: false,
+        message: `${varName} (still using placeholder value)`,
+        solution: `Replace placeholder value with actual ${varName}`
       });
     } else {
       results.push({
@@ -35,19 +53,27 @@ async function validateEnvironmentVariables(): Promise<ValidationResult[]> {
     }
   }
 
-  // Include optional variables if they are set
+  // Include optional variables if they are set (ignore if using placeholder values)
   if (process.env.WATCH_WALLETS && process.env.WATCH_WALLETS.trim()) {
-    results.push({
-      passed: true,
-      message: 'WATCH_WALLETS'
-    });
+    const watchWallets = process.env.WATCH_WALLETS;
+    // Skip validation if using placeholder values - treat as not set
+    if (!placeholders.some(ph => watchWallets.includes(ph))) {
+      results.push({
+        passed: true,
+        message: 'WATCH_WALLETS'
+      });
+    }
   }
 
   if (process.env.SOURCE_WALLET_PRIVATE_KEY) {
-    results.push({
-      passed: true,
-      message: 'SOURCE_WALLET_PRIVATE_KEY'
-    });
+    const sourceKey = process.env.SOURCE_WALLET_PRIVATE_KEY;
+    // Skip validation if using placeholder values - treat as not set
+    if (!placeholders.some(ph => sourceKey.includes(ph))) {
+      results.push({
+        passed: true,
+        message: 'SOURCE_WALLET_PRIVATE_KEY'
+      });
+    }
   }
 
   return results;
@@ -110,6 +136,14 @@ async function validateWalletAddresses(): Promise<ValidationResult[]> {
 
   if (!process.env.WATCH_WALLETS || !process.env.WATCH_WALLETS.trim()) {
     return results; // Skip if not set
+  }
+
+  // Common placeholder values
+  const placeholders = ['wallet1_address', 'wallet2_address', 'your_'];
+
+  // Skip if using placeholder values - treat as not set
+  if (placeholders.some(ph => process.env.WATCH_WALLETS!.includes(ph))) {
+    return results;
   }
 
   const wallets = process.env.WATCH_WALLETS.split(',').map(w => w.trim()).filter(w => w);
