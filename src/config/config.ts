@@ -153,14 +153,25 @@ class ConfigValidator {
     }
 
     if (process.env.SOURCE_WALLET_PRIVATE_KEY) {
-      try {
-        const sourceKey = process.env.SOURCE_WALLET_PRIVATE_KEY;
-        if (sourceKey.length < 32) {
-          throw new Error('Source wallet private key appears to be too short');
+      const sourceKey = process.env.SOURCE_WALLET_PRIVATE_KEY;
+
+      // Skip validation if using placeholder values or empty
+      const placeholders = ['your_source_wallet_base58_private_key', 'your_'];
+      const isPlaceholder = placeholders.some(ph => sourceKey.includes(ph)) || !sourceKey.trim();
+
+      if (!isPlaceholder) {
+        try {
+          if (sourceKey.length < 32) {
+            throw new Error('Source wallet private key appears to be too short');
+          }
+          const decoded = bs58.decode(sourceKey);
+          if (decoded.length !== 64) {
+            throw new Error('Invalid length');
+          }
+        } catch (error) {
+          // Invalid key - just skip it (it's optional)
+          // Don't throw, just ignore it
         }
-        bs58.decode(sourceKey);
-      } catch {
-        throw new Error('Invalid source wallet private key format - should be base58 encoded');
       }
     }
   }

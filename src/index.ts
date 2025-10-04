@@ -47,14 +47,20 @@ if (walletsArg) {
   watchWallets = appConfig.trading.watchWallets;
 } else if (appConfig.testing.sourceWalletPrivateKey) {
   // Priority 3: Derive from SOURCE_WALLET_PRIVATE_KEY
-  try {
-    const sourceKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.testing.sourceWalletPrivateKey));
-    watchWallets = [sourceKeypair.publicKey.toBase58()];
-    usingSourceWallet = true;
-  } catch (error) {
-    console.error('✗ Invalid SOURCE_WALLET_PRIVATE_KEY format');
-    console.error('  Solution: Provide valid base58 encoded private key');
-    process.exit(1);
+  // Skip if using placeholder values
+  const placeholders = ['your_source_wallet_base58_private_key', 'your_'];
+  const isPlaceholder = placeholders.some(ph => appConfig.testing.sourceWalletPrivateKey.includes(ph));
+
+  if (!isPlaceholder) {
+    try {
+      const sourceKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.testing.sourceWalletPrivateKey));
+      watchWallets = [sourceKeypair.publicKey.toBase58()];
+      usingSourceWallet = true;
+    } catch (error) {
+      console.error('✗ Invalid SOURCE_WALLET_PRIVATE_KEY format');
+      console.error('  Solution: Provide valid base58 encoded private key');
+      process.exit(1);
+    }
   }
 }
 

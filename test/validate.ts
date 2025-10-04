@@ -484,7 +484,8 @@ function printResults(category: string, results: ValidationResult[]): boolean {
   let allPassed = true;
 
   for (const result of results) {
-    const icon = result.passed ? '✓' : '✗';
+    // Use ! for warnings (passed=true but has solution)
+    const icon = result.passed ? (result.solution ? '!' : '✓') : '✗';
     console.log(`  ${icon} ${result.message}`);
 
     if (!result.passed) {

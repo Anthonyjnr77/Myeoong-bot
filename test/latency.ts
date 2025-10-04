@@ -344,7 +344,7 @@ async function main() {
 
   // Run SDK operations in parallel with shared progress
   let sdkCompleted = 0;
-  const totalSDKOps = SDK_OPERATIONS + NUM_OPERATIONS;
+  const totalSDKOps = SDK_OPERATIONS * 2;
 
   const updateSDKProgress = () => {
     sdkCompleted++;
@@ -370,7 +370,7 @@ async function main() {
   };
 
   const runPumpSwapSDKOperations = async () => {
-    for (let i = 1; i <= NUM_OPERATIONS; i++) {
+    for (let i = 1; i <= SDK_OPERATIONS; i++) {
       const result = await executeSDKNativeOperation(
         'PUMP_SWAP',
         connection,
@@ -387,7 +387,7 @@ async function main() {
     }
   };
 
-  console.log(`\nRunning SDK operations (${SDK_OPERATIONS} pump.fun + ${NUM_OPERATIONS} PumpSwap)...`);
+  console.log(`\nRunning SDK operations (${SDK_OPERATIONS} pump.fun + ${SDK_OPERATIONS} PumpSwap)...`);
   await Promise.all([runPumpFunSDKOperations(), runPumpSwapSDKOperations()]);
 
   await bot.stop();
