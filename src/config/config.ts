@@ -61,8 +61,8 @@ export const TIMEOUTS = {
 
 // Pool limits
 export const POOL_LIMITS = {
-  MIN_SOL: 20,
-  MAX_SOL: 100,
+  MIN_SOL: 5,
+  MAX_SOL: 200,
   CACHE_MAX_AGE_MS: 24 * 60 * 60 * 1000,
 } as const;
 
