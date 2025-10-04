@@ -5,14 +5,15 @@ import { OnlinePumpAmmSdk, PUMP_AMM_SDK } from '@pump-fun/pump-swap-sdk';
 import { PumpFunSDK } from '../pumpfun-sdk/PumpFunSDK';
 import {
   POOL_CACHE_FILE,
-  SLIPPAGE_BPS,
   GAS_UNIT_LIMIT,
   GAS_UNIT_PRICE,
-  PUMPSWAP_SLIPPAGE,
   TIMEOUTS,
-  AMOUNTS,
   POOL_LIMITS,
-} from '../config/test-constants';
+  SELL_PERCENTAGE,
+  PUMP_FUN_CREATE_SOL,
+  PUMPSWAP_SLIPPAGE,
+  appConfig
+} from '../config/config';
 import BN from 'bn.js';
 import fs from 'fs';
 
@@ -69,6 +70,29 @@ export async function getTransactionSlot(
   return null;
 }
 
+export async function waitForBuyConfirmation(
+  connection: Connection,
+  signature: string,
+  timeoutMs: number = 30000
+): Promise<string> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const status = await connection.getSignatureStatus(signature);
+
+      if (status?.value?.confirmationStatus === 'confirmed' ||
+          status?.value?.confirmationStatus === 'finalized') {
+        return signature;
+      }
+    } catch {}
+
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error(`Buy confirmation timeout after ${timeoutMs}ms`);
+}
+
 // ============================================================================
 // FORMATTING
 // ============================================================================
@@ -78,7 +102,7 @@ export function formatWallet(address: string): string {
 }
 
 export function getSellAmount(balance: bigint): bigint {
-  return (balance * BigInt(AMOUNTS.SELL_PERCENTAGE * 100)) / 100n;
+  return (balance * BigInt(SELL_PERCENTAGE * 100)) / 100n;
 }
 
 // ============================================================================
@@ -93,76 +117,95 @@ export async function findPumpSwapPool(
   const MIN = POOL_LIMITS.MIN_SOL * LAMPORTS_PER_SOL;
   const MAX = POOL_LIMITS.MAX_SOL * LAMPORTS_PER_SOL;
 
-  // Try to load from cache
+  // Try to load from cache (no time limit)
   try {
     if (fs.existsSync(POOL_CACHE_FILE)) {
       const cacheData = JSON.parse(fs.readFileSync(POOL_CACHE_FILE, 'utf-8'));
-      const cacheAge = Date.now() - cacheData.timestamp;
+      const poolPubkey = new PublicKey(cacheData.pool);
+      const baseMint = new PublicKey(cacheData.baseMint);
+      const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, poolPubkey, true);
 
-      if (cacheAge < POOL_LIMITS.CACHE_MAX_AGE_MS) {
-        const poolPubkey = new PublicKey(cacheData.pool);
-        const baseMint = new PublicKey(cacheData.baseMint);
-        const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, poolPubkey, true);
-
-        const quoteInfo = await connection.getAccountInfo(poolQuoteTokenAccount);
-        if (quoteInfo) {
-          const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
-          if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
-            const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
-            return { pool: poolPubkey, baseMint, liquidity: quoteSol };
-          }
+      const quoteInfo = await connection.getAccountInfo(poolQuoteTokenAccount);
+      if (quoteInfo) {
+        const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
+        if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
+          const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
+          return { pool: poolPubkey, baseMint, liquidity: quoteSol };
         }
       }
     }
   } catch {}
 
-  // Search for valid pool
-  const accounts = await connection.getProgramAccounts(PUMPSWAP_PROGRAM_ID, {
-    filters: [{ dataSize: 300 }]
+  // Search for valid pool with timeout and progress
+  console.log('Searching blockchain for pool...');
+
+  const searchPromise = (async () => {
+    const accounts = await connection.getProgramAccounts(PUMPSWAP_PROGRAM_ID, {
+      filters: [{ dataSize: 300 }]
+    });
+
+    let scanned = 0;
+    for (const { pubkey, account } of accounts) {
+      scanned++;
+      if (scanned % 50 === 0) {
+        process.stdout.write(`\rScanned ${scanned} pools...`);
+      }
+
+      const discriminator = account.data.subarray(0, 8);
+      const expected = Buffer.from([241, 154, 109, 4, 17, 177, 109, 188]);
+      if (!discriminator.equals(expected)) continue;
+
+      const baseMintOffset = 8 + 1 + 2 + 32;
+      const baseMint = new PublicKey(account.data.subarray(baseMintOffset, baseMintOffset + 32));
+
+      try {
+        const poolBaseTokenAccount = getAssociatedTokenAddressSync(baseMint, pubkey, true);
+        const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, pubkey, true);
+        const [baseInfo, quoteInfo] = await connection.getMultipleAccountsInfo([
+          poolBaseTokenAccount,
+          poolQuoteTokenAccount
+        ]);
+
+        if (!baseInfo || !quoteInfo) continue;
+
+        const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
+        if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
+          const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
+
+          // Save to cache
+          const dataDir = path.join(__dirname, '../../data');
+          if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+          }
+
+          const cacheData = {
+            pool: pubkey.toBase58(),
+            baseMint: baseMint.toBase58(),
+            liquidity: quoteSol,
+            timestamp: Date.now()
+          };
+          fs.writeFileSync(POOL_CACHE_FILE, JSON.stringify(cacheData, null, 2));
+
+          if (scanned >= 50) process.stdout.write('\n');
+          console.log('Found valid pool');
+          return { pool: pubkey, baseMint, liquidity: quoteSol };
+        }
+      } catch {}
+    }
+
+    if (scanned >= 50) process.stdout.write('\n');
+    console.log('No valid pools found');
+    return null;
+  })();
+
+  const timeoutPromise = new Promise<null>((resolve) => {
+    setTimeout(() => {
+      console.log('\nPool search timed out after 30s');
+      resolve(null);
+    }, 30000);
   });
 
-  for (const { pubkey, account } of accounts) {
-    const discriminator = account.data.subarray(0, 8);
-    const expected = Buffer.from([241, 154, 109, 4, 17, 177, 109, 188]);
-    if (!discriminator.equals(expected)) continue;
-
-    const baseMintOffset = 8 + 1 + 2 + 32;
-    const baseMint = new PublicKey(account.data.subarray(baseMintOffset, baseMintOffset + 32));
-
-    try {
-      const poolBaseTokenAccount = getAssociatedTokenAddressSync(baseMint, pubkey, true);
-      const poolQuoteTokenAccount = getAssociatedTokenAddressSync(NATIVE_MINT, pubkey, true);
-      const [baseInfo, quoteInfo] = await connection.getMultipleAccountsInfo([
-        poolBaseTokenAccount,
-        poolQuoteTokenAccount
-      ]);
-
-      if (!baseInfo || !quoteInfo) continue;
-
-      const poolQuoteAmount = quoteInfo.data.readBigUInt64LE(64);
-      if (poolQuoteAmount >= MIN && poolQuoteAmount <= MAX) {
-        const quoteSol = Number(poolQuoteAmount) / LAMPORTS_PER_SOL;
-
-        // Save to cache
-        const dataDir = path.join(__dirname, '../../data');
-        if (!fs.existsSync(dataDir)) {
-          fs.mkdirSync(dataDir, { recursive: true });
-        }
-
-        const cacheData = {
-          pool: pubkey.toBase58(),
-          baseMint: baseMint.toBase58(),
-          liquidity: quoteSol,
-          timestamp: Date.now()
-        };
-        fs.writeFileSync(POOL_CACHE_FILE, JSON.stringify(cacheData, null, 2));
-
-        return { pool: pubkey, baseMint, liquidity: quoteSol };
-      }
-    } catch {}
-  }
-
-  return null;
+  return Promise.race([searchPromise, timeoutPromise]);
 }
 
 // ============================================================================
@@ -174,7 +217,7 @@ export async function createTestToken(
   wallet: Keypair,
   name?: string
 ): Promise<string | undefined> {
-  const provider = new AnchorProvider(connection, new Wallet(wallet), { commitment: "confirmed" });
+  const provider = new AnchorProvider(connection, new Wallet(wallet), { commitment: "processed" });
   const sdk = new PumpFunSDK(provider);
   const mint = Keypair.generate();
 
@@ -185,17 +228,37 @@ export async function createTestToken(
 
     const tokenName = name || `TEST${Date.now() % 1000}`;
 
-    await sdk.trade.createAndBuy(
+    const result = await sdk.trade.createAndBuy(
       wallet,
       mint,
       { name: tokenName, symbol: "TEST", description: "Test token", file: blob },
-      BigInt(AMOUNTS.PUMP_FUN_CREATE_SOL * LAMPORTS_PER_SOL),
-      SLIPPAGE_BPS,
-      { unitLimit: GAS_UNIT_LIMIT, unitPrice: GAS_UNIT_PRICE }
+      BigInt(PUMP_FUN_CREATE_SOL * LAMPORTS_PER_SOL),
+      BigInt(appConfig.trading.protocols.pumpFun.slippageBps),
+      { unitLimit: GAS_UNIT_LIMIT, unitPrice: GAS_UNIT_PRICE },
+      "processed",  // commitment
+      "confirmed"   // finality
     );
 
-    return mint.publicKey.toBase58();
-  } catch {
+    if (!result.success) {
+      console.error('Token creation failed:', result.error);
+      return undefined;
+    }
+
+    // Verify bonding curve exists before returning
+    const bondingCurvePDA = sdk.pda.getBondingCurvePDA(mint.publicKey);
+
+    // Poll until bonding curve is visible (max 10 seconds)
+    for (let i = 0; i < 20; i++) {
+      const account = await connection.getAccountInfo(bondingCurvePDA);
+      if (account) {
+        return mint.publicKey.toBase58();
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    throw new Error('Bonding curve not found after 10 seconds');
+  } catch (error) {
+    console.error('Token creation error:', error);
     return undefined;
   }
 }
@@ -226,7 +289,7 @@ export async function executePumpSwapBuy(
   tx.feePayer = wallet.publicKey;
   tx.sign(wallet);
 
-  return await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+  return await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
 }
 
 export async function executePumpSwapSell(
@@ -251,7 +314,7 @@ export async function executePumpSwapSell(
   tx.feePayer = wallet.publicKey;
   tx.sign(wallet);
 
-  return await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+  return await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
 }
 
 // ============================================================================
@@ -267,7 +330,7 @@ export async function executePumpFunBuy(
   const provider = new AnchorProvider(
     connection,
     new Wallet(wallet),
-    { commitment: "confirmed" }
+    { commitment: "processed" }
   );
   const sdk = new PumpFunSDK(provider);
 
@@ -275,9 +338,15 @@ export async function executePumpFunBuy(
     wallet,
     mint,
     BigInt(amountSol * LAMPORTS_PER_SOL),
-    SLIPPAGE_BPS,
-    { unitLimit: GAS_UNIT_LIMIT, unitPrice: GAS_UNIT_PRICE }
+    BigInt(appConfig.trading.protocols.pumpFun.slippageBps),
+    { unitLimit: GAS_UNIT_LIMIT, unitPrice: GAS_UNIT_PRICE },
+    "processed",  // commitment
+    "confirmed"   // finality
   );
+
+  if (!result.success || !result.signature) {
+    throw new Error(result.error ? String(result.error) : 'Transaction failed');
+  }
 
   return result.signature;
 }
@@ -291,7 +360,7 @@ export async function executePumpFunSell(
   const provider = new AnchorProvider(
     connection,
     new Wallet(wallet),
-    { commitment: "confirmed" }
+    { commitment: "processed" }
   );
   const sdk = new PumpFunSDK(provider);
 
@@ -299,9 +368,15 @@ export async function executePumpFunSell(
     wallet,
     mint,
     tokenAmount,
-    SLIPPAGE_BPS,
-    { unitLimit: GAS_UNIT_LIMIT, unitPrice: GAS_UNIT_PRICE }
+    BigInt(appConfig.trading.protocols.pumpFun.slippageBps),
+    { unitLimit: GAS_UNIT_LIMIT, unitPrice: GAS_UNIT_PRICE },
+    "processed",  // commitment
+    "confirmed"   // finality
   );
+
+  if (!result.success || !result.signature) {
+    throw new Error(result.error ? String(result.error) : 'Transaction failed');
+  }
 
   return result.signature;
 }

@@ -1,0 +1,25 @@
+
+> sol-copytrader@0.1.0 trades
+> tsx test/trades.ts pump
+
+Creating token... ✓ A4A5r7gD...
+Finding pool... ✓ BXZjsevA... (48.8 SOL)
+
+Pattern: pump
+
+Starting detector
+Watching wallets: GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN
+pump.fun enabled: true
+PumpSwap enabled: true
+Stream subscribed successfully
+────────────────────────────────────────────────────────────
+
+[22:13:56] pumpfun   BUY  0.005 SOL  ✓
+[22:14:00] pumpswap  BUY  0.002 SOL  ✓
+[22:14:01] pumpfun   SELL 50%        ✓
+[22:14:05] pumpswap  SELL 50%        ✓
+
+✓ Complete
+  Executed: 4 trades
+  Confirmed: 4/4
+

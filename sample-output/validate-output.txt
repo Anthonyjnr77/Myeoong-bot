@@ -1,0 +1,37 @@
+
+> sol-copytrader@0.1.0 validate
+> tsx test/validate.ts
+
+SETUP VALIDATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Environment Variables:
+  ✓ HELIUS_API_KEY
+  ✓ HELIUS_RPC_ENDPOINT
+  ✓ LASERSTREAM_ENDPOINT
+  ✓ BOT_WALLET_PRIVATE_KEY
+  ✓ SOURCE_WALLET_PRIVATE_KEY
+
+Optional Variables:
+  ! WATCH_WALLETS not set
+    Optional, pass wallet addresses as CLI arguments or set in .env to run bot
+
+Wallet Keys:
+  ✓ Bot wallet valid: 2i4U...Lkmr
+  ✓ Source wallet valid: GQBd...QriN
+
+Connections:
+  ✓ RPC endpoint responding (488ms)
+  ✓ Laserstream connection successful
+
+Wallet Balances:
+  ✓ Bot wallet balance: 18.2916 SOL
+  ✓ Source wallet balance: 18.2996 SOL
+
+Functionality:
+  ✓ Config system loaded successfully
+  ✓ Token account creation works
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ ALL CHECKS PASSED - Ready to run scripts
+

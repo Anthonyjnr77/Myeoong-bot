@@ -1,0 +1,69 @@
+
+> sol-copytrader@0.1.0 demo
+> tsx test/demo.ts
+
+COPYTRADING BOT DEMO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Setup:
+  Source wallet: GQBd...QriN (18.79 SOL)
+  Bot wallet:    2i4U...Lkmr (18.88 SOL)
+
+Creating pump.fun token... BfKo...KXbm
+Finding PumpSwap pool... BXZj...oCHg (48.4 SOL liquidity)
+Starting detector
+Watching wallets: GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN
+pump.fun enabled: true
+PumpSwap enabled: true
+Stream subscribed successfully
+────────────────────────────────────────────────────────────
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PUMP.FUN TEST (5 cycles)
+
+Cycle 1: BUY 460ms ✓  SELL 788ms ✓
+Cycle 2: BUY 459ms ✓  SELL 570ms ✓
+Cycle 3: BUY 612ms ✓  SELL 709ms ✓
+Cycle 4: BUY 524ms ✓  SELL 553ms ✓
+Cycle 5: BUY 544ms ✓  SELL 549ms ✓
+
+PUMPSWAP TEST (5 cycles)
+
+Cycle 1: BUY 543ms ✓  SELL 566ms ✓
+Cycle 2: BUY 581ms ✓  SELL 570ms ✓
+Cycle 3: BUY 571ms ✓  SELL 547ms ✓
+Cycle 4: BUY 445ms ✓  SELL 457ms ✓
+Cycle 5: BUY 570ms ✓  SELL 528ms ✓
+
+Measuring block distances...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RESULTS
+
+PUMP.FUN (5 buys, 5 sells)
+                   Processing Time (ms)         Block Distance (blks)
+                   p50     p95     avg          p50    p95    avg
+  BUY:             524     612     520            2      2    1.8
+  SELL:            570     788     634            2      2    2.0
+
+PUMPSWAP (5 buys, 5 sells)
+                   Processing Time (ms)         Block Distance (blks)
+                   p50     p95     avg          p50    p95    avg
+  BUY:             570     581     542            2      2    2.0
+  SELL:            547     570     534            2      3    2.4
+
+LATENCY BREAKDOWN (10 buy operations)
+                           p50        p95        avg
+  Detection                1ms        2ms        1ms
+  Parsing                  0ms        1ms        0ms
+  Building               275ms      314ms      273ms
+  Execution              272ms      301ms      257ms
+  Total                  544ms      612ms      531ms
+  Block Distance         2blks      2blks    1.9blks
+
+Success rate: 20/20 (100%)
+Demo completed in 1m 26s
+

@@ -1,0 +1,84 @@
+
+> sol-copytrader@0.1.0 bot
+> tsx src/index.ts
+
+🤖 COPYTRADING BOT - LIVE MODE
+════════════════════════════════════════════════════════════
+ℹ️  Using configured source wallet
+
+Mode:        LIVE
+Wallets:     GQBd...QriN (1 total)
+Bot Wallet:  2i4U...Lkmr (18.29 SOL)
+Protocols:   pump.fun ✓  PumpSwap ✓
+Log File:    ./logs/bot-2025-10-04T14-13-19.log
+
+════════════════════════════════════════════════════════════
+Listening for trades...
+
+Starting detector
+Watching wallets: GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN
+pump.fun enabled: true
+PumpSwap enabled: true
+Stream subscribed successfully
+────────────────────────────────────────────────────────────
+
+[22:13:58] DETECTED - pump.fun BUY
+    Mint: A4A5r7gDHM9SgTo9pdVAu3kaVckcpnXN7JMx4tnmL8aD
+
+[22:13:59] COPY - pump.fun BUY
+    Amount: 0.005 SOL
+    Built in 603ms
+    Executed in 331ms
+    ✓ Sig: 5sJmxNYVzWwo2BTdCJbNwwzMVBQ8Y34y57mz7JQv7UxnKnYHAFqUXtmQKnJfj6wNHY3LmwS5VugY4ZkggHxwt1Sa
+
+[22:14:01] DETECTED - PumpSwap BUY
+    Pool: BXZjsevAvX7oPEWdGktkj96XNqZyvid3GXpUPLbboCHg
+
+[22:14:02] COPY - PumpSwap BUY
+    Amount: 0.002 SOL
+    Built in 476ms
+    Executed in 275ms
+    ✓ Sig: 5GxMXqFp4kq25YvDJx7byPpazgeq37HK71uqh9K57XNbVZQ91gLCzDYs7QoX7p8SkYq4C3NKxyTFjp2W4un3Ruhf
+
+[22:14:04] DETECTED - pump.fun SELL
+    Mint: A4A5r7gDHM9SgTo9pdVAu3kaVckcpnXN7JMx4tnmL8aD
+
+[22:14:05] COPY - pump.fun SELL
+    Amount: 50%
+    Built in 498ms
+    Executed in 293ms
+    ✓ Sig: 2fq6jF4PJW46NiBgvJMQ8eZ9eTB87QcGX1Rp6VxvQRHoc1dVMvWMVAxFa5PkSzraptonnRngBgresrhRJkvkjUMK
+
+[22:14:07] DETECTED - PumpSwap SELL
+    Pool: BXZjsevAvX7oPEWdGktkj96XNqZyvid3GXpUPLbboCHg
+
+[22:14:08] COPY - PumpSwap SELL
+    Amount: 50%
+    Built in 267ms
+    Executed in 297ms
+    ✓ Sig: 2F4w1d8qXwqwBfj7wDBEsdHPvYSNttx3nEKJn3emr7v4vDEGJp5xBXVz9Zj7rLk7uK6qcgysjyeBcBpGGCM3v9k1
+
+
+Shutting down gracefully...
+
+════════════════════════════════════════════════════════════
+SESSION SUMMARY (LIVE MODE)
+════════════════════════════════════════════════════════════
+
+Uptime:          1m 11s
+Detected:        4
+Successful:      4
+Failed:          0
+Filtered:        1
+Success Rate:    100.0%
+
+Avg Build Time:  461ms
+Avg Exec Time:   299ms
+Avg Total Time:  760ms
+
+By Protocol:
+  pump.fun:  2/2 successful
+  PumpSwap:  2/2 successful
+
+Session saved to: /Users/mjto/Desktop/sol-copytrader/sol-copytrader/logs/session-2025-10-04T14-13-19.json
+

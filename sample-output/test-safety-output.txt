@@ -1,0 +1,67 @@
+
+> sol-copytrader@0.1.0 test-safety
+> tsx test/test-safety.ts
+
+PRODUCTION SAFETY TESTS
+============================================================
+
+GROUP 1: DATA INTEGRITY & VALIDATION
+────────────────────────────────────────────────────────────
+
+Testing: Duplicate transaction detection... ✓ PASS (25ms)
+Testing: Signature set memory management... ✓ PASS (20ms)
+Testing: Null pool account - PumpSwap... ✓ PASS (598ms)
+Testing: Null bonding curve - PumpFun... ✓ PASS (637ms)
+Testing: Zero token balance - PumpSwap... ✓ PASS (0ms)
+Testing: RPC rate limit retry... ✓ PASS (1506ms)
+Testing: Non-429 error fails immediately... ✓ PASS (1ms)
+Testing: Malformed instruction data - too short... ✓ PASS (6ms)
+Testing: Malformed instruction data - corrupt bytes... ✓ PASS (1ms)
+Testing: Missing account indices... ✓ PASS (0ms)
+Testing: Out of bounds account index... ✓ PASS (1ms)
+Testing: Zero token balance - PumpFun sell... ✓ PASS (651ms)
+Testing: Zero token balance - PumpSwap sell... ✓ PASS (267ms)
+Testing: Clear error messages on sell failures... ✓ PASS (635ms)
+
+GROUP 2: ERROR HANDLING & RESILIENCE
+────────────────────────────────────────────────────────────
+
+Testing: Circuit breaker activates after 5 failures... ✓ PASS (0ms)
+Testing: Circuit breaker resets counter on success... ✓ PASS (1ms)
+
+GROUP 3: LIFECYCLE & RESOURCE MANAGEMENT
+────────────────────────────────────────────────────────────
+
+Testing: Graceful shutdown components exist... ✓ PASS (4ms)
+Testing: In-flight trades counter logic... ✓ PASS (0ms)
+Testing: Shutdown timeout after 5 seconds... ✓ PASS (0ms)
+Testing: Uncaught exception handler present... ✓ PASS (0ms)
+Testing: Handler array memory after 1000 cycles... ✓ PASS (9ms)
+
+GROUP 4: CONCURRENCY & RACE CONDITIONS
+────────────────────────────────────────────────────────────
+
+Testing: Concurrent identical transactions... ✓ PASS (295ms)
+Testing: Handler removal during event emission... ✓ PASS (8ms)
+Testing: Bot start called twice without stop... ✓ PASS (308ms)
+
+GROUP 5: CONFIGURATION & STATE VALIDATION
+────────────────────────────────────────────────────────────
+
+Testing: Missing BOT_WALLET_PRIVATE_KEY... ✓ PASS (0ms)
+Testing: Malformed private key format... ✓ PASS (0ms)
+Testing: Negative token amount in parsed trade... ✓ PASS (529ms)
+Testing: Invalid protocol in parsed trade... ✓ PASS (279ms)
+Testing: Empty watchWallets array... ✓ PASS (339ms)
+
+============================================================
+TEST SUMMARY
+
+Total:  29
+Passed: 29
+Failed: 0
+
+============================================================
+✓ ALL TESTS PASSED
+============================================================
+

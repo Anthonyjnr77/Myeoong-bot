@@ -4,13 +4,11 @@ import { appConfig } from '../src/config/config';
 import {
   getSellAmount,
   findPumpSwapPool,
-  createTestToken,
-  executePumpFunBuy,
-  executePumpFunSell,
-  executePumpSwapBuy,
-  executePumpSwapSell
+  createTestToken
 } from '../src/utils/test-utils';
-import { AMOUNTS, TIMEOUTS } from '../src/config/test-constants';
+import { SELL_PERCENTAGE, TIMEOUTS } from '../src/config/config';
+import { CopytradingBot } from '../src/bot/CopytradingBot';
+import { SourceTradeExecutor } from '../src/bot/test/SourceTradeExecutor';
 import bs58 from 'bs58';
 
 // CLI parsing
@@ -75,12 +73,12 @@ EXAMPLES:
   npm run trades -- buy                              (pump.fun buy, creates token)
   npm run trades -- buy --pumpfun --amount=0.05      (pump.fun buy 0.05 SOL)
   npm run trades -- buy --pumpswap                   (PumpSwap buy, finds pool)
-  npm run trades -- sell --token=7YPL...3mK8         (pump.fun sell 10%)
-  npm run trades -- sell --pool=Pool9xKm...          (PumpSwap sell 10%)
+  npm run trades -- sell --token=7YPL...3mK8         (pump.fun sell token)
+  npm run trades -- sell --pool=Pool9xKm...          (PumpSwap sell from pool)
   npm run trades -- buysell --pumpswap               (PumpSwap buy then sell)
 
 NOTES:
-  - Sells always sell 10% of balance
+  - Sells always sell the percentage defined in config (SELL_PERCENTAGE)
   - The '--' is required to pass arguments through npm
   - If no protocol specified, defaults to pump.fun
 `);
@@ -134,86 +132,29 @@ async function executeTrade(
   token: string,
   pool: string | undefined,
   amount: number | undefined,
+  executor: SourceTradeExecutor,
   wallet: Keypair,
   connection: Connection
 ): Promise<{ success: boolean; error?: string; signature?: string }> {
   try {
-    if (targetProtocol === 'pumpfun') {
-      const mint = new PublicKey(token);
+    // Use executeTrade like demo.ts does
+    const tradeParams: any = {
+      protocol: targetProtocol === 'pumpfun' ? 'PUMP_FUN' : 'PUMP_SWAP',
+      type: type.toUpperCase() as 'BUY' | 'SELL',
+      mint: token
+    };
 
-      if (type === 'buy') {
-        const signature = await executePumpFunBuy(
-          connection,
-          wallet,
-          mint,
-          amount || AMOUNTS.PUMP_FUN_BUY_SOL
-        );
-        return { success: true, signature };
-      } else {
-        // Get current balance
-        const balance = await getTokenBalance(connection, wallet, mint);
-
-        if (balance === 0n) {
-          throw new Error('No tokens to sell');
-        }
-
-        // Sell 10% of balance
-        const sellAmount = getSellAmount(balance);
-
-        const signature = await executePumpFunSell(
-          connection,
-          wallet,
-          mint,
-          sellAmount
-        );
-        return { success: true, signature };
-      }
-    } else {
-      // PumpSwap
-      if (!pool) {
-        throw new Error('Pool address required for PumpSwap trades');
-      }
-
-      const poolPubkey = new PublicKey(pool);
-
-      if (type === 'buy') {
-        const signature = await executePumpSwapBuy(
-          connection,
-          wallet,
-          poolPubkey,
-          amount || AMOUNTS.PUMP_SWAP_BUY_SOL
-        );
-        return { success: true, signature };
-      } else {
-        // Get balance
-        const accounts = await connection.getTokenAccountsByOwner(
-          wallet.publicKey,
-          { mint: (await connection.getAccountInfo(poolPubkey))!.data.subarray(43, 75) as any }
-        );
-
-        if (accounts.value.length === 0) {
-          throw new Error('No tokens to sell');
-        }
-
-        const balance = accounts.value[0].account.data.readBigUInt64LE(64);
-        if (balance === 0n) {
-          throw new Error('No tokens to sell');
-        }
-
-        // Sell 10% of balance
-        const sellAmount = getSellAmount(balance);
-
-        const signature = await executePumpSwapSell(
-          connection,
-          wallet,
-          poolPubkey,
-          sellAmount.toString()
-        );
-        return { success: true, signature };
-      }
+    // Add pool and baseMint for PumpSwap
+    if (targetProtocol === 'pumpswap' && pool) {
+      tradeParams.pool = new PublicKey(pool);
+      tradeParams.baseMint = new PublicKey(token); // token is baseMint for PumpSwap
     }
+
+    const signature = await executor.executeTrade(wallet, tradeParams);
+
+    return { success: true, signature };
   } catch (error: any) {
-    return { success: false, error: error.message };
+    return { success: false, error: error.message || error.toString() };
   }
 }
 
@@ -295,8 +236,8 @@ async function main() {
     }
   }
 
-  // Setup connection and wallet (minimal, for balance check)
-  const connection = new Connection(appConfig.rpc.endpoint);
+  // Setup connection and wallet (use processed commitment for fresh blockhashes)
+  const connection = new Connection(appConfig.rpc.endpoint, { commitment: 'processed' });
   const wallet = Keypair.fromSecretKey(bs58.decode(appConfig.testing!.sourceWalletPrivateKey));
 
   // Validate pool exists and is owned by PumpSwap program
@@ -335,7 +276,7 @@ async function main() {
   let totalRequired = 0;
   for (const step of buySteps) {
     const stepProtocol = step.protocol || protocol;
-    const defaultAmount = stepProtocol === 'pumpfun' ? AMOUNTS.PUMP_FUN_BUY_SOL : AMOUNTS.PUMP_SWAP_BUY_SOL;
+    const defaultAmount = stepProtocol === 'pumpfun' ? appConfig.trading.protocols.pumpFun.buyAmountSol : appConfig.trading.protocols.pumpSwap.buyAmountSol;
     const stepAmount = step.amount || (amountArg ? parseFloat(amountArg) : defaultAmount);
     totalRequired += stepAmount;
   }
@@ -412,6 +353,15 @@ async function main() {
   if (opts.length > 0) console.log(`Options: ${opts.join(', ')}`);
   console.log();
 
+  // Initialize bot and executor (like demo.ts does)
+  const bot = new CopytradingBot({
+    mode: 'live',
+    watchWallets: [wallet.publicKey.toBase58()]
+  });
+  const executor = new SourceTradeExecutor(connection);
+  await bot.initialize();
+  await bot.start();
+
   // Execute pattern and track confirmations
   const pendingConfirmations: Array<{ signature: string; promise: Promise<boolean> }> = [];
   const lastBuy: Record<'pumpfun' | 'pumpswap', { signature: string; promise: Promise<boolean> } | null> = {
@@ -437,11 +387,11 @@ async function main() {
       second: '2-digit'
     });
 
-    const defaultAmount = stepProtocol === 'pumpfun' ? AMOUNTS.PUMP_FUN_BUY_SOL : AMOUNTS.PUMP_SWAP_BUY_SOL;
+    const defaultAmount = stepProtocol === 'pumpfun' ? appConfig.trading.protocols.pumpFun.buyAmountSol : appConfig.trading.protocols.pumpSwap.buyAmountSol;
     const tradeAmount = step.amount || (amountArg ? parseFloat(amountArg) : undefined);
     const amountStr = step.type === 'buy'
       ? `${tradeAmount ?? defaultAmount} SOL`
-      : `${AMOUNTS.SELL_PERCENTAGE * 100}%`;
+      : `${SELL_PERCENTAGE * 100}%`;
 
     process.stdout.write(
       `[${time}] ${stepProtocol.padEnd(9)} ${step.type.toUpperCase().padEnd(4)} ${amountStr.padEnd(10)} `
@@ -456,6 +406,7 @@ async function main() {
       tokenForTrade,
       poolForTrade,
       tradeAmount,
+      executor,
       wallet,
       connection
     );
@@ -504,6 +455,10 @@ async function main() {
     console.log(`  Failed: ${failCount}`);
   }
   console.log();
+
+  // Cleanup bot
+  await bot.stop();
+  process.exit(0);
 }
 
 process.on('unhandledRejection', (error) => {

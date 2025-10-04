@@ -1,13 +1,12 @@
 import 'dotenv/config';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
-import { Detector } from './detector';
-import { TradeParser } from './parser';
-import { PumpFunTxBuilder } from './pumpfun-tx';
-import { PumpSwapTxBuilder } from './pumpswap-tx';
-import { TransactionExecutor } from './executor';
 import { Metrics } from './utils/metrics';
 import { Logger } from './utils/logger';
 import { appConfig } from './config/config';
+import { CopytradingBot } from './bot/CopytradingBot';
+import { LoggingHandler } from './bot/handlers/LoggingHandler';
+import { MetricsHandler } from './bot/handlers/MetricsHandler';
+import { CircuitBreakerHandler } from './bot/handlers/CircuitBreakerHandler';
 import bs58 from 'bs58';
 import fs from 'fs';
 import path from 'path';
@@ -138,18 +137,19 @@ async function main() {
   const botKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.wallet.privateKey));
   const botBalance = (await connection.getBalance(botKeypair.publicKey)) / 1e9;
 
-  const detector = new Detector();
-  const parser = new TradeParser();
-  const pumpFunBuilder = new PumpFunTxBuilder();
-  const pumpSwapBuilder = new PumpSwapTxBuilder();
-  const executor = new TransactionExecutor();
+  // Initialize bot
+  const bot = new CopytradingBot({
+    mode,
+    watchWallets
+  });
 
-  await pumpFunBuilder.initialize();
+  // Add handlers
+  bot.addHandler(new LoggingHandler(logger));
+  bot.addHandler(new MetricsHandler(metrics));
+  bot.addHandler(new CircuitBreakerHandler(5, () => shutdown()));
 
-  // Circuit breaker state
-  let consecutiveFailures = 0;
-  let circuitBreakerActive = false;
-  let inflightTrades = 0;
+  // Initialize bot
+  await bot.initialize();
 
   // Print banner
   console.log(mode === 'simulate' ? '🤖 COPYTRADING BOT - SIMULATE MODE' : '🤖 COPYTRADING BOT - LIVE MODE');
@@ -170,129 +170,8 @@ async function main() {
   console.log('═'.repeat(60));
   console.log('Listening for trades...\n');
 
-  // Trade handler
-  detector.onTransaction(async (tx) => {
-    // Circuit breaker check
-    if (circuitBreakerActive) return;
-
-    inflightTrades++;
-
-    try {
-      // Parse
-      const parseResult = parser.parse(tx);
-
-      if (!parseResult.success) {
-        if ('filtered' in parseResult && parseResult.filtered) {
-          metrics.recordFiltered();
-
-          // Log filtered trades for visibility (skip token creations)
-          if (parseResult.reason !== 'token_creation') {
-            const protocol = tx.protocol === 'PUMP_FUN' ? 'pump.fun' : 'PumpSwap';
-            logger.warn(`Filtered ${protocol} trade (below minimum ${appConfig.trading.minTradeAmountSol} SOL) - Sig: ${tx.signature.slice(0, 8)}...`);
-          }
-        } else if ('error' in parseResult && parseResult.error) {
-          // Parse error - try to infer protocol from transaction for metrics
-          const protocol = tx.protocol === 'PUMP_FUN' ? 'pumpfun' : 'pumpswap';
-          handleFailure(protocol, parseResult.error);
-        }
-        return;
-      }
-
-      const parsed = parseResult.data!;
-
-      // Record detection
-      const protocol = parsed.protocol === 'PUMP_FUN' ? 'pumpfun' : 'pumpswap';
-      metrics.recordDetection(protocol);
-
-      // Log detection
-      logger.trade({
-        phase: 'DETECTED',
-        protocol,
-        type: parsed.type.toLowerCase() as 'buy' | 'sell',
-        mint: parsed.mint,
-        pool: parsed.pool
-      });
-
-      // Route to correct builder
-      const builder = parsed.protocol === 'PUMP_FUN' ? pumpFunBuilder : pumpSwapBuilder;
-
-      // Build transaction
-      const buildStart = Date.now();
-      const buildResult = await builder.buildTransactionWithTiming(parsed);
-      const buildTime = Date.now() - buildStart;
-
-      if (!buildResult.success) {
-        handleFailure(protocol, buildResult.error || 'Build failed');
-        return;
-      }
-
-      // SIMULATE MODE
-      if (mode === 'simulate') {
-        const copyAmount = parsed.type === 'BUY'
-          ? (protocol === 'pumpfun' ? appConfig.trading.protocols.pumpFun.buyAmountSol : appConfig.trading.protocols.pumpSwap.buyAmountSol)
-          : -1; // -1 represents "ALL tokens" for sells
-
-        logger.trade({
-          phase: 'SIMULATE',
-          protocol,
-          type: parsed.type.toLowerCase() as 'buy' | 'sell',
-          buildTime,
-          copyAmount
-        });
-        metrics.recordSuccess(protocol, buildTime);
-        consecutiveFailures = 0;
-        return;
-      }
-
-      // LIVE MODE - Execute
-      const execStart = Date.now();
-      const execResult = await executor.executeTransactionWithTiming(
-        buildResult.transaction!,
-        builder.getBotKeypair(),
-        { blockhash: buildResult.blockhash }
-      );
-      const execTime = Date.now() - execStart;
-
-      if (execResult.success) {
-        const copyAmount = parsed.type === 'BUY'
-          ? (protocol === 'pumpfun' ? appConfig.trading.protocols.pumpFun.buyAmountSol : appConfig.trading.protocols.pumpSwap.buyAmountSol)
-          : -1; // -1 represents "ALL tokens" for sells
-
-        logger.trade({
-          phase: 'SUCCESS',
-          protocol,
-          type: parsed.type.toLowerCase() as 'buy' | 'sell',
-          copyAmount,
-          buildTime,
-          execTime,
-          signature: execResult.signature
-        });
-        metrics.recordSuccess(protocol, buildTime, execTime);
-        consecutiveFailures = 0;
-      } else {
-        handleFailure(protocol, execResult.error || 'Execution failed');
-      }
-
-    } finally {
-      inflightTrades--;
-    }
-  });
-
-  function handleFailure(protocol: 'pumpfun' | 'pumpswap', error: string) {
-    consecutiveFailures++;
-    logger.error(`✗ Trade failed (${consecutiveFailures}/5): ${error}`);
-    metrics.recordFailure(protocol, error);
-
-    if (consecutiveFailures >= 5) {
-      circuitBreakerActive = true;
-      logger.error('🚨 CIRCUIT BREAKER TRIGGERED - Stopping bot');
-      logger.error('   5 consecutive failures detected');
-      shutdown();
-    }
-  }
-
-  // Start detector
-  await detector.start(watchWallets);
+  // Start bot
+  await bot.start();
 
   // Shutdown handler
   let isShuttingDown = false;
@@ -303,24 +182,13 @@ async function main() {
 
     console.log('\nShutting down gracefully...');
 
-    // Stop detector
-    detector.stop();
+    // Stop bot (handles detector, inflight trades, and builder cleanup)
+    await bot.stop();
 
-    // Wait for in-flight trades (max 5 seconds)
-    let waitTime = 0;
-    while (inflightTrades > 0 && waitTime < 5000) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-      waitTime += 100;
-    }
-
-    if (inflightTrades > 0) {
-      console.log(`Warning: ${inflightTrades} trades still in-flight after 5s`);
-    }
-
-    // Cleanup builders
-    pumpFunBuilder.cleanup();
-    if (typeof (pumpSwapBuilder as any).cleanup === 'function') {
-      (pumpSwapBuilder as any).cleanup();
+    // Check if there were any inflight trades remaining
+    const remainingTrades = bot.getInflightTrades();
+    if (remainingTrades > 0) {
+      console.log(`Warning: ${remainingTrades} trades still in-flight after 5s`);
     }
 
     // Print and save metrics

@@ -1,0 +1,85 @@
+
+> sol-copytrader@0.1.0 bot
+> tsx src/index.ts --mode=simulate
+
+🤖 COPYTRADING BOT - SIMULATE MODE
+════════════════════════════════════════════════════════════
+⚠️  Transactions will NOT be executed
+ℹ️  Using configured source wallet
+
+Mode:        SIMULATE
+Wallets:     GQBd...QriN (1 total)
+Bot Wallet:  2i4U...Lkmr (18.39 SOL)
+Protocols:   pump.fun ✓  PumpSwap ✓
+Log File:    ./logs/bot-2025-10-04T14-17-06.log
+
+════════════════════════════════════════════════════════════
+Listening for trades...
+
+Starting detector
+Watching wallets: GQBdEQCfAWRrYTsBh644dadnzTupCyPp283b9EGeQriN
+pump.fun enabled: true
+PumpSwap enabled: true
+Stream subscribed successfully
+────────────────────────────────────────────────────────────
+
+[22:17:23] DETECTED - pump.fun BUY
+    Mint: FyD7dELxgUQHk8NT88R6uX1dJ3K3MwH2AsbqXhqrfLHM
+
+[22:17:24] COPY - pump.fun BUY
+    Amount: 0.005 SOL
+    Built in 682ms
+    Executed in 0ms
+    ✓ Sig: SIMULATED_1759587444237
+
+[22:17:27] DETECTED - PumpSwap BUY
+    Pool: BXZjsevAvX7oPEWdGktkj96XNqZyvid3GXpUPLbboCHg
+
+[22:17:27] COPY - PumpSwap BUY
+    Amount: 0.002 SOL
+    Built in 509ms
+    Executed in 0ms
+    ✓ Sig: SIMULATED_1759587447601
+
+[22:17:29] DETECTED - pump.fun SELL
+    Mint: FyD7dELxgUQHk8NT88R6uX1dJ3K3MwH2AsbqXhqrfLHM
+
+[22:17:30] COPY - pump.fun SELL
+    Amount: 50%
+    Built in 449ms
+    Executed in 0ms
+    ✓ Sig: SIMULATED_1759587450050
+
+[22:17:33] DETECTED - PumpSwap SELL
+    Pool: BXZjsevAvX7oPEWdGktkj96XNqZyvid3GXpUPLbboCHg
+
+[22:17:33] COPY - PumpSwap SELL
+    Amount: 50%
+    Built in 295ms
+    Executed in 0ms
+    ✓ Sig: SIMULATED_1759587453339
+
+
+Shutting down gracefully...
+
+════════════════════════════════════════════════════════════
+SESSION SUMMARY (SIMULATE MODE)
+════════════════════════════════════════════════════════════
+
+Uptime:          1m 2s
+Detected:        4
+Successful:      4
+Failed:          0
+Filtered:        1
+Success Rate:    100.0%
+
+Avg Build Time:  484ms
+Avg Exec Time:   0ms
+Avg Total Time:  484ms
+
+By Protocol:
+  pump.fun:  2/2 successful
+  PumpSwap:  2/2 successful
+
+Session saved to: /Users/mjto/Desktop/sol-copytrader/sol-copytrader/logs/session-2025-10-04T14-17-06.json
+

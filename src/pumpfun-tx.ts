@@ -18,6 +18,7 @@ import {
 } from '@solana/spl-token';
 import BN from 'bn.js';
 import { PumpFunSDK } from './pumpfun-sdk/PumpFunSDK';
+import { SELL_PERCENTAGE } from './config/config';
 import { ParsedTrade } from './parser';
 import { appConfig, TRADING_UTILS } from './config/config';
 import bs58 from 'bs58';
@@ -300,10 +301,10 @@ export class PumpFunTxBuilder {
 
     const bondingCreator = new PublicKey(bondingCurveAccount.creator);
 
-    // Calculate sell amount (50% of balance)
-    const sellAmount = (tokenBalance * 50n) / 100n;
+    // Calculate sell amount based on configured percentage
+    const sellAmount = (tokenBalance * BigInt(SELL_PERCENTAGE * 100)) / 100n;
     if (sellAmount === 0n) {
-      throw new Error(`Sell amount too small - 50% of balance is zero (balance: ${tokenBalance.toString()})`);
+      throw new Error(`Sell amount too small - ${SELL_PERCENTAGE * 100}% of balance is zero (balance: ${tokenBalance.toString()})`);
     }
 
     // Calculate minimum SOL to receive with slippage

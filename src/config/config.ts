@@ -1,7 +1,7 @@
 // config/config.ts
-import config from 'config';
 import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import bs58 from 'bs58';
+import path from 'path';
 
 // Pump.fun constants
 export const PUMP_FUN_CONSTANTS = {
@@ -45,6 +45,37 @@ export const PUMP_SWAP_CONSTANTS = {
   },
 } as const;
 
+// Test and operational constants
+export const SELL_PERCENTAGE = 0.5;
+export const GAS_UNIT_LIMIT = 250_000;
+export const GAS_UNIT_PRICE = 250_000;
+export const PUMP_FUN_CREATE_SOL = 0.0001; // Token creation fee, not configurable
+export const PUMPSWAP_SLIPPAGE = 10; // PumpSwap slippage percentage
+
+// Timeouts (milliseconds)
+export const TIMEOUTS = {
+  DETECTION_MS: 15_000,
+  CONFIRMATION_MS: 30_000,
+  SLOT_FETCH_MS: 60_000,
+} as const;
+
+// Pool limits
+export const POOL_LIMITS = {
+  MIN_SOL: 20,
+  MAX_SOL: 100,
+  CACHE_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+} as const;
+
+// Test defaults
+export const DEFAULTS = {
+  NUM_CYCLES: 5, //Number of test cycles per protocol in Demo
+  NUM_OPERATIONS: 20, //Number of tests per protocol in Latency Test
+  SDK_OPERATIONS: 10, //Number of SDK tests  per protocol in Latency Test
+} as const;
+
+// Pool cache file path
+export const POOL_CACHE_FILE = path.join(__dirname, '../../data/pumpswap-pool.json');
+
 // TypeScript interface for type safety
 interface CopyTradingConfig {
   mode: 'simulate' | 'live';
@@ -58,6 +89,7 @@ interface CopyTradingConfig {
   };
   trading: {
     watchWallets: string[];
+    minBalance: number;
     minTradeAmountSol: number;
     priorityFee: {
       unitLimit: number;
@@ -134,8 +166,20 @@ class ConfigValidator {
   }
 
   private static validateTradingParams(trading: any): void {
+    if (trading.minBalance <= 0) {
+      throw new Error('Minimum balance must be positive');
+    }
+
     if (trading.minTradeAmountSol <= 0) {
       throw new Error('Minimum trade amount must be positive');
+    }
+
+    if (trading.priorityFee.unitLimit <= 0) {
+      throw new Error('Priority fee unit limit must be positive');
+    }
+
+    if (trading.priorityFee.unitPrice <= 0) {
+      throw new Error('Priority fee unit price must be positive');
     }
 
     // Validate pump.fun config
@@ -178,19 +222,87 @@ class ConfigValidator {
       .map(w => w.trim())
       .filter(w => w.length > 0) || [];
 
+    // Parse all configuration from environment with defaults
+    const mode = (process.env.MODE || 'live') as 'simulate' | 'live';
+    const rpcCommitment = (process.env.RPC_COMMITMENT || 'processed') as 'processed' | 'confirmed' | 'finalized';
+    const minBalance = parseFloat(process.env.MIN_BALANCE || '0.1');
+    const minTradeAmount = parseFloat(process.env.MIN_TRADE_AMOUNT || '0.001');
+    const priorityFeeUnitLimit = parseInt(process.env.PRIORITY_FEE_UNIT_LIMIT || '250000');
+    const priorityFeeUnitPrice = parseInt(process.env.PRIORITY_FEE_UNIT_PRICE || '250000');
+    const pumpFunEnabled = process.env.PUMPFUN_ENABLED !== 'false';
+    const pumpSwapEnabled = process.env.PUMPSWAP_ENABLED !== 'false';
+    const pumpFunBuyAmount = parseFloat(process.env.PUMPFUN_BUY_AMOUNT || '0.005');
+    const pumpSwapBuyAmount = parseFloat(process.env.PUMPSWAP_BUY_AMOUNT || '0.002');
+    const pumpFunSlippage = parseInt(process.env.PUMPFUN_SLIPPAGE_BPS || '500');
+    const pumpSwapSlippage = parseInt(process.env.PUMPSWAP_SLIPPAGE_BPS || '1000');
+    const logFile = process.env.LOG_FILE || './logs/bot.log';
+
+    // Validate mode
+    if (mode !== 'simulate' && mode !== 'live') {
+      throw new Error('MODE must be either "simulate" or "live"');
+    }
+
+    // Validate commitment
+    if (!['processed', 'confirmed', 'finalized'].includes(rpcCommitment)) {
+      throw new Error('RPC_COMMITMENT must be "processed", "confirmed", or "finalized"');
+    }
+
+    // Validate numeric values
+    if (isNaN(minBalance) || minBalance <= 0) {
+      throw new Error('MIN_BALANCE must be a positive number');
+    }
+    if (isNaN(minTradeAmount) || minTradeAmount <= 0) {
+      throw new Error('MIN_TRADE_AMOUNT must be a positive number');
+    }
+    if (isNaN(priorityFeeUnitLimit) || priorityFeeUnitLimit <= 0) {
+      throw new Error('PRIORITY_FEE_UNIT_LIMIT must be a positive integer');
+    }
+    if (isNaN(priorityFeeUnitPrice) || priorityFeeUnitPrice <= 0) {
+      throw new Error('PRIORITY_FEE_UNIT_PRICE must be a positive integer');
+    }
+    if (isNaN(pumpFunBuyAmount) || pumpFunBuyAmount <= 0) {
+      throw new Error('PUMPFUN_BUY_AMOUNT must be a positive number');
+    }
+    if (isNaN(pumpSwapBuyAmount) || pumpSwapBuyAmount <= 0) {
+      throw new Error('PUMPSWAP_BUY_AMOUNT must be a positive number');
+    }
+    if (isNaN(pumpFunSlippage) || pumpFunSlippage < 0 || pumpFunSlippage > 10000) {
+      throw new Error('PUMPFUN_SLIPPAGE_BPS must be between 0 and 10000');
+    }
+    if (isNaN(pumpSwapSlippage) || pumpSwapSlippage < 0 || pumpSwapSlippage > 10000) {
+      throw new Error('PUMPSWAP_SLIPPAGE_BPS must be between 0 and 10000');
+    }
+
     const cfg: CopyTradingConfig = {
-      mode: config.get('mode'),
+      mode,
       rpc: {
         endpoint: process.env.HELIUS_RPC_ENDPOINT!,
-        commitment: config.get('rpc.commitment')
+        commitment: rpcCommitment
       },
       laserstream: {
         endpoint: process.env.LASERSTREAM_ENDPOINT!,
         apiKey: process.env.HELIUS_API_KEY!
       },
       trading: {
-        ...config.get('trading'),
-        watchWallets  // Use parsed wallets from env
+        watchWallets,
+        minBalance,
+        minTradeAmountSol: minTradeAmount,
+        priorityFee: {
+          unitLimit: priorityFeeUnitLimit,
+          unitPrice: priorityFeeUnitPrice
+        },
+        protocols: {
+          pumpFun: {
+            enabled: pumpFunEnabled,
+            buyAmountSol: pumpFunBuyAmount,
+            slippageBps: pumpFunSlippage
+          },
+          pumpSwap: {
+            enabled: pumpSwapEnabled,
+            buyAmountSol: pumpSwapBuyAmount,
+            slippageBps: pumpSwapSlippage
+          }
+        }
       },
       wallet: {
         privateKey: process.env.BOT_WALLET_PRIVATE_KEY!
@@ -198,7 +310,9 @@ class ConfigValidator {
       testing: {
         sourceWalletPrivateKey: process.env.SOURCE_WALLET_PRIVATE_KEY || ''
       },
-      logging: config.get('logging')
+      logging: {
+        logFile
+      }
     };
 
     // Allow empty wallets from .env (can be provided via CLI)

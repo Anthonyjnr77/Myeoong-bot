@@ -1,0 +1,69 @@
+
+> sol-copytrader@0.1.0 latency
+> tsx test/latency.ts
+
+LATENCY BENCHMARK
+============================================================
+
+Setup:
+  Source wallet: GQBd...QriN (18.72 SOL)
+  Bot wallet:    2i4U...Lkmr (18.85 SOL)
+  Test token:    CRD1...uzp1
+  PumpSwap pool: BXZj...oCHg (48.4 SOL liquidity)
+
+Running 20 pump.fun BUY operations...
+
+Progress: [████████████████████████████████████████] 20/20
+
+Running 20 PumpSwap BUY operations...
+
+Progress: [████████████████████████████████████████] 20/20
+
+Measuring block distances... Done
+
+Running SDK operations (10 pump.fun + 10 PumpSwap)...
+
+Progress: [████████████████████████████████████████] 20/20
+
+============================================================
+
+PUMP.FUN (20 operations, 20 successful)
+
+                           p50        p95        avg
+  Detection                1ms        2ms        1ms
+  Parsing                  0ms        1ms        0ms
+  Building               296ms      711ms      311ms
+  Execution              245ms      346ms      260ms
+  Total:                 546ms      998ms      572ms
+  Block Distance:        2blks      3blks    2.4blks
+
+PUMPSWAP (20 operations, 20 successful)
+
+                           p50        p95        avg
+  Detection                1ms        2ms        1ms
+  Parsing                  0ms        1ms        0ms
+  Building               280ms      342ms      279ms
+  Execution              275ms      308ms      263ms
+  Total:                 546ms      642ms      544ms
+  Block Distance:        2blks      3blks    2.4blks
+
+============================================================
+
+TOTAL (40 operations, 40 successful)
+
+BOT PERFORMANCE:
+                           p50        p95        avg
+  Processing Time:       546ms      754ms      558ms
+  Block Distance:        2blks      3blks    2.4blks
+
+SDK NATIVE PERFORMANCE:
+                           p50        p95        avg
+  Build + Submit:       1501ms    14939ms     5851ms
+
+COMPARISON:
+  Bot is 10.49x faster than SDK native implementation
+  Saves ~5293ms per trade on average
+
+Success Rate: 40/40 (100.0%)
+Benchmark completed in 4m 49s
+

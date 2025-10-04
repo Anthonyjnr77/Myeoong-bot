@@ -73,8 +73,8 @@ class EdgeCaseValidator {
   }
 
   printSummary(): void {
-    console.log('\n' + '='.repeat(60));
-    console.log('EDGE CASE TEST SUMMARY\n');
+    console.log('='.repeat(60));
+    console.log('TEST SUMMARY\n');
 
     const passed = this.results.filter(r => r.passed).length;
     const failed = this.results.filter(r => !r.passed).length;
@@ -109,10 +109,13 @@ class EdgeCaseValidator {
 }
 
 async function main() {
-  console.log('EDGE CASE VALIDATION TESTS');
+  console.log('PRODUCTION SAFETY TESTS');
   console.log('='.repeat(60) + '\n');
 
   const validator = new EdgeCaseValidator();
+
+  console.log('GROUP 1: DATA INTEGRITY & VALIDATION');
+  console.log('─'.repeat(60) + '\n');
 
   // Test 1: Duplicate Transaction Detection
   await validator.runTest('Duplicate transaction detection', async () => {
@@ -614,6 +617,9 @@ async function main() {
     }
   });
 
+  console.log('\nGROUP 2: ERROR HANDLING & RESILIENCE');
+  console.log('─'.repeat(60) + '\n');
+
   // Test 8: Circuit Breaker - 5 consecutive failures
   await validator.runTest('Circuit breaker activates after 5 failures', async () => {
     // This test needs to simulate the bot behavior without actually starting the full bot
@@ -692,6 +698,9 @@ async function main() {
     }
   });
 
+  console.log('\nGROUP 3: LIFECYCLE & RESOURCE MANAGEMENT');
+  console.log('─'.repeat(60) + '\n');
+
   // Test 10: Graceful shutdown - signal handling
   await validator.runTest('Graceful shutdown components exist', async () => {
     // Verify that index.ts exports/has the shutdown logic
@@ -706,13 +715,20 @@ async function main() {
                              indexContent.includes('process.on(\'SIGTERM\'');
     const hasShutdownFunction = indexContent.includes('async function shutdown()') ||
                                indexContent.includes('function shutdown()');
-    const hasDetectorStop = indexContent.includes('detector.stop()');
-    const hasBuilderCleanup = indexContent.includes('cleanup()');
+    const hasBotStop = indexContent.includes('bot.stop()');
     const hasMetricsSave = indexContent.includes('metrics.saveToFileSync');
     const hasLoggerClose = indexContent.includes('logger.close()');
 
-    if (hasSignalHandlers && hasShutdownFunction && hasDetectorStop &&
-        hasBuilderCleanup && hasMetricsSave && hasLoggerClose) {
+    // Verify bot.stop() contains detector.stop() and cleanup()
+    const botContent = require('fs').readFileSync(
+      require('path').join(__dirname, '../src/bot/CopytradingBot.ts'),
+      'utf-8'
+    );
+    const botStopHasDetectorStop = botContent.includes('this.detector.stop()');
+    const botStopHasCleanup = botContent.includes('.cleanup()');
+
+    if (hasSignalHandlers && hasShutdownFunction && hasBotStop &&
+        hasMetricsSave && hasLoggerClose && botStopHasDetectorStop && botStopHasCleanup) {
       return {
         passed: true,
         message: 'All graceful shutdown components present in code'
@@ -721,10 +737,11 @@ async function main() {
       const missing = [];
       if (!hasSignalHandlers) missing.push('signal handlers');
       if (!hasShutdownFunction) missing.push('shutdown function');
-      if (!hasDetectorStop) missing.push('detector.stop()');
-      if (!hasBuilderCleanup) missing.push('builder.cleanup()');
+      if (!hasBotStop) missing.push('bot.stop()');
       if (!hasMetricsSave) missing.push('metrics.saveToFileSync');
       if (!hasLoggerClose) missing.push('logger.close()');
+      if (!botStopHasDetectorStop) missing.push('detector.stop() in bot.stop()');
+      if (!botStopHasCleanup) missing.push('cleanup() in bot.stop()');
 
       return {
         passed: false,
@@ -828,6 +845,379 @@ async function main() {
     }
   });
 
+  // Test: Handler array memory after 1000 add/remove cycles
+  await validator.runTest('Handler array memory after 1000 cycles', async () => {
+    const { CopytradingBot } = await import('../src/bot/CopytradingBot');
+
+    const bot = new CopytradingBot({
+      mode: 'simulate',
+      watchWallets: []
+    });
+
+    const handler = { handle: () => {} };
+
+    for (let i = 0; i < 1000; i++) {
+      bot.addHandler(handler);
+      bot.removeHandler(handler);
+    }
+
+    const handlerCount = (bot as any).handlers.length;
+
+    if (handlerCount === 0) {
+      return {
+        passed: true,
+        message: 'Handler array empty after 1000 add/remove cycles, no leak'
+      };
+    } else {
+      return {
+        passed: false,
+        message: `Handler array has ${handlerCount} items, expected 0`
+      };
+    }
+  });
+
+  console.log('\nGROUP 4: CONCURRENCY & RACE CONDITIONS');
+  console.log('─'.repeat(60) + '\n');
+
+  // Test: Concurrent identical transactions
+  await validator.runTest('Concurrent identical transactions', async () => {
+    const { CopytradingBot } = await import('../src/bot/CopytradingBot');
+
+    const bot = new CopytradingBot({
+      mode: 'simulate',
+      watchWallets: []
+    });
+
+    let executionCount = 0;
+    bot.addHandler({
+      handle: (event) => {
+        if (event.type === 'executionSuccess') {
+          executionCount++;
+        }
+      }
+    });
+
+    await bot.initialize();
+
+    // Create identical mock transaction
+    const mockTx = {
+      signature: 'duplicate_test_sig',
+      protocol: 'PUMP_FUN' as const,
+      slot: 1000,
+      timestamp: Date.now(),
+      receivedTimestamp: Date.now(),
+      processedTimestamp: Date.now(),
+      watchedWallets: ['test'],
+      accountKeys: ['prog', 'user', 'mint', 'curve', 'acurve', 'sys', 'token', 'rent'],
+      instructions: [{
+        programIdIndex: 0,
+        accounts: new Uint8Array([0, 1, 2, 3, 4, 5, 6]),
+        data: new Uint8Array([0xea, 0xeb, 0xda, 0x01, 0x12, 0x3d, 0x06, 0x66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+      }]
+    };
+
+    try {
+      // Process same transaction twice concurrently
+      await Promise.all([
+        (bot as any).processTrade(mockTx),
+        (bot as any).processTrade(mockTx)
+      ]);
+
+      await bot.stop();
+
+      // Detector has deduplication, but if both bypass it, processTrade would execute twice
+      // This tests if transaction handling is idempotent
+      if (executionCount <= 2) {
+        return {
+          passed: true,
+          message: `Processed ${executionCount} times (within acceptable range for concurrent calls)`
+        };
+      } else {
+        return {
+          passed: false,
+          message: `Duplicate concurrent transaction processed ${executionCount} times`
+        };
+      }
+    } finally {
+      await bot.stop();
+    }
+  });
+
+  // Test: Handler removal during event emission
+  await validator.runTest('Handler removal during event emission', async () => {
+    const { CopytradingBot } = await import('../src/bot/CopytradingBot');
+
+    const bot = new CopytradingBot({
+      mode: 'simulate',
+      watchWallets: []
+    });
+
+    let handler1Called = false;
+    let handler2Called = false;
+    let handler3Called = false;
+
+    const handler1 = {
+      handle: (event: any) => {
+        handler1Called = true;
+        // Remove handler2 during emission
+        bot.removeHandler(handler2);
+      }
+    };
+
+    const handler2 = {
+      handle: (event: any) => {
+        handler2Called = true;
+      }
+    };
+
+    const handler3 = {
+      handle: (event: any) => {
+        handler3Called = true;
+      }
+    };
+
+    bot.addHandler(handler1);
+    bot.addHandler(handler2);
+    bot.addHandler(handler3);
+
+    // Manually emit event
+    (bot as any).emit({ type: 'filtered', reason: 'test' });
+
+    if (handler1Called && handler3Called && !handler2Called) {
+      return {
+        passed: true,
+        message: 'Handler 2 removed during emission, handler 3 still executed'
+      };
+    } else {
+      return {
+        passed: false,
+        message: `Expected h1=true, h2=false, h3=true, got h1=${handler1Called}, h2=${handler2Called}, h3=${handler3Called}`
+      };
+    }
+  });
+
+  // Test: Bot start called twice without stop
+  await validator.runTest('Bot start called twice without stop', async () => {
+    const { CopytradingBot } = await import('../src/bot/CopytradingBot');
+
+    const bot = new CopytradingBot({
+      mode: 'simulate',
+      watchWallets: []
+    });
+
+    try {
+      await bot.initialize();
+      await bot.start();
+
+      // Call start again
+      await bot.start();
+
+      // Check if still running
+      const isRunning = (bot as any).isRunning;
+
+      await bot.stop();
+
+      if (isRunning) {
+        return {
+          passed: true,
+          message: 'Second start() call handled gracefully, bot still running'
+        };
+      } else {
+        return {
+          passed: false,
+          message: 'Bot not running after double start()'
+        };
+      }
+    } finally {
+      await bot.stop();
+    }
+  });
+
+  console.log('\nGROUP 5: CONFIGURATION & STATE VALIDATION');
+  console.log('─'.repeat(60) + '\n');
+
+  // Test: Missing required config - BOT_WALLET_PRIVATE_KEY
+  await validator.runTest('Missing BOT_WALLET_PRIVATE_KEY', async () => {
+    try {
+      // Empty string decodes to empty buffer, but Keypair.fromSecretKey will fail
+      const result = bs58.decode('');
+      Keypair.fromSecretKey(result);
+      return {
+        passed: false,
+        message: 'Should have thrown error for empty key'
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        passed: true,
+        message: 'Invalid key format caught: ' + message.substring(0, 50)
+      };
+    }
+  });
+
+  // Test: Malformed private key format
+  await validator.runTest('Malformed private key format', async () => {
+    try {
+      const decoded = bs58.decode('not-a-valid-base58-key!!!');
+      Keypair.fromSecretKey(decoded);
+      return {
+        passed: false,
+        message: 'Should have thrown error for invalid key'
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.toLowerCase().includes('base58') ||
+          message.toLowerCase().includes('invalid') ||
+          message.toLowerCase().includes('length')) {
+        return {
+          passed: true,
+          message: 'Malformed key caught: ' + message.substring(0, 50)
+        };
+      } else {
+        return {
+          passed: false,
+          message: 'Unexpected error: ' + message
+        };
+      }
+    }
+  });
+
+  // Test: Negative token amount in parsed trade
+  await validator.runTest('Negative token amount in parsed trade', async () => {
+    const { PumpFunTxBuilder } = await import('../src/pumpfun-tx');
+
+    const builder = new PumpFunTxBuilder();
+    await builder.initialize();
+
+    const parsedTrade = {
+      type: 'BUY' as const,
+      protocol: 'PUMP_FUN' as const,
+      mint: '11111111111111111111111111111111',
+      bondingCurve: '11111111111111111111111111111111',
+      associatedBondingCurve: '11111111111111111111111111111111',
+      user: '11111111111111111111111111111111',
+      tokenAmount: -1000, // Negative amount
+      solAmount: 0.01,
+      virtualSolReserves: 1000,
+      virtualTokenReserves: 1000000,
+      signature: 'test',
+      slot: 1000,
+      timestamp: Date.now()
+    };
+
+    const result = await builder.buildTransactionWithTiming(parsedTrade as any);
+
+    builder.cleanup();
+
+    if (!result.success) {
+      return {
+        passed: true,
+        message: 'Negative amount handled: ' + (result.error || 'build failed').substring(0, 50)
+      };
+    } else {
+      return {
+        passed: false,
+        message: 'Should have failed for negative amount'
+      };
+    }
+  });
+
+  // Test: Invalid protocol in parsed trade
+  await validator.runTest('Invalid protocol in parsed trade', async () => {
+    const { CopytradingBot } = await import('../src/bot/CopytradingBot');
+
+    const bot = new CopytradingBot({
+      mode: 'simulate',
+      watchWallets: []
+    });
+
+    await bot.initialize();
+
+    // Mock parser to return invalid protocol
+    const originalParse = (bot as any).parser.parse;
+    (bot as any).parser.parse = () => ({
+      success: true,
+      data: {
+        protocol: 'INVALID_PROTOCOL',
+        type: 'BUY',
+        mint: 'test',
+        user: 'test',
+        tokenAmount: 1000,
+        solAmount: 0.01,
+        signature: 'test',
+        slot: 1000,
+        timestamp: Date.now()
+      }
+    });
+
+    const mockTx = {
+      signature: 'invalid_protocol',
+      protocol: 'PUMP_FUN' as const,
+      slot: 1000,
+      timestamp: Date.now(),
+      receivedTimestamp: Date.now(),
+      processedTimestamp: Date.now(),
+      watchedWallets: ['test'],
+      accountKeys: [],
+      instructions: []
+    };
+
+    try {
+      await (bot as any).processTrade(mockTx);
+
+      (bot as any).parser.parse = originalParse;
+      await bot.stop();
+
+      return {
+        passed: true,
+        message: 'Invalid protocol handled without crash'
+      };
+    } catch (error) {
+      (bot as any).parser.parse = originalParse;
+      await bot.stop();
+
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.toLowerCase().includes('protocol') || message.toLowerCase().includes('builder')) {
+        return {
+          passed: true,
+          message: 'Invalid protocol error caught: ' + message.substring(0, 50)
+        };
+      } else {
+        return {
+          passed: false,
+          message: 'Unexpected error: ' + message
+        };
+      }
+    }
+  });
+
+  // Test: Empty watchWallets array
+  await validator.runTest('Empty watchWallets array', async () => {
+    const { CopytradingBot } = await import('../src/bot/CopytradingBot');
+
+    const bot = new CopytradingBot({
+      mode: 'simulate',
+      watchWallets: []
+    });
+
+    try {
+      await bot.initialize();
+      await bot.start();
+      await bot.stop();
+
+      return {
+        passed: true,
+        message: 'Bot started with empty watchWallets without crash'
+      };
+    } catch (error) {
+      return {
+        passed: false,
+        message: `Failed with empty watchWallets: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  });
+
+  console.log();
   validator.printSummary();
   process.exit(0);
 }

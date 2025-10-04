@@ -20,6 +20,7 @@ import {
 import BN from 'bn.js';
 import { ParsedTrade } from './parser';
 import { appConfig, TRADING_UTILS } from './config/config';
+import { SELL_PERCENTAGE } from './config/config';
 import bs58 from 'bs58';
 import { toError } from './utils/errors';
 import { fetchWithRetry } from './utils/rpc-retry';
@@ -417,10 +418,10 @@ export class PumpSwapTxBuilder {
         throw new Error(`Zero token balance - bot wallet has no tokens to sell (mint: ${baseMint.toBase58()})`);
       }
 
-      // Calculate sell amount (50% of balance)
-      const sellAmount = tokenBalance.divn(2);
+      // Calculate sell amount based on configured percentage
+      const sellAmount = tokenBalance.muln(SELL_PERCENTAGE * 100).divn(100);
       if (sellAmount.isZero()) {
-        throw new Error(`Sell amount too small - 50% of balance is zero (balance: ${tokenBalance.toString()})`);
+        throw new Error(`Sell amount too small - ${SELL_PERCENTAGE * 100}% of balance is zero (balance: ${tokenBalance.toString()})`);
       }
 
       if (!poolInfo) {

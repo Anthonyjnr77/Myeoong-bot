@@ -1,10 +1,7 @@
 import 'dotenv/config';
-import { Connection, Keypair, PublicKey } from '@solana/web3.js';
-import { Detector } from '../src/detector';
-import { TradeParser } from '../src/parser';
-import { PumpFunTxBuilder } from '../src/pumpfun-tx';
-import { PumpSwapTxBuilder } from '../src/pumpswap-tx';
-import { TransactionExecutor } from '../src/executor';
+import { Connection, Keypair } from '@solana/web3.js';
+import { CopytradingBot } from '../src/bot/CopytradingBot';
+import { SourceTradeExecutor } from '../src/bot/test/SourceTradeExecutor';
 import { appConfig } from '../src/config/config';
 import {
   calculateStats,
@@ -12,12 +9,9 @@ import {
   getTransactionSlot,
   findPumpSwapPool,
   createTestToken,
-  executePumpFunBuy,
-  executePumpFunSell,
-  executePumpSwapBuy,
-  executePumpSwapSell
+  waitForBuyConfirmation
 } from '../src/utils/test-utils';
-import { DEFAULTS, AMOUNTS, TIMEOUTS } from '../src/config/test-constants';
+import { DEFAULTS, TIMEOUTS } from '../src/config/config';
 import bs58 from 'bs58';
 
 interface TradeResult {
@@ -45,310 +39,6 @@ interface FailedTrade {
   error: string;
 }
 
-async function waitForConfirmation(
-  connection: Connection,
-  signature: string,
-  timeoutMs: number = TIMEOUTS.CONFIRMATION_MS
-): Promise<boolean> {
-  const startTime = Date.now();
-  while (Date.now() - startTime < timeoutMs) {
-    try {
-      const status = await connection.getSignatureStatus(signature);
-      if (status.value?.confirmationStatus === 'confirmed' ||
-          status.value?.confirmationStatus === 'finalized') {
-        return true;
-      }
-      if (status.value?.err) {
-        return false;
-      }
-    } catch (error) {
-      // Silently retry on RPC errors
-    }
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  return false;
-}
-
-async function executeCycle(
-  protocol: 'PUMP_FUN' | 'PUMP_SWAP',
-  cycleNum: number,
-  connection: Connection,
-  sourceWallet: Keypair,
-  detector: Detector,
-  parser: TradeParser,
-  builder: PumpFunTxBuilder | PumpSwapTxBuilder,
-  executor: TransactionExecutor,
-  testMint: string | null,
-  poolInfo: any
-): Promise<{ buy: TradeResult | null; sell: TradeResult | null; buyError?: string; sellError?: string }> {
-  
-  let buyResult: TradeResult | null = null;
-  let sellResult: TradeResult | null = null;
-
-  // BUY
-  let buyError: string | undefined;
-  const buyPromise = new Promise<TradeResult | null>((resolve) => {
-    let processing = false;
-    let sourceSignature: string | null = null;
-
-    const handler = async (tx: any) => {
-      if (processing || tx.protocol !== protocol) return;
-      processing = true;  // Set synchronously before await
-
-      const parseStart = Date.now();
-      const parseResult = parser.parse(tx);
-
-      if (!parseResult.success) {
-        if ('error' in parseResult) {
-          buyError = parseResult.error;
-          resolve(null);
-        } else {
-          processing = false;  // Reset if filtered
-        }
-        return; // Filtered or error
-      }
-
-      if (parseResult.data.type !== 'BUY') {
-        processing = false;  // Reset if wrong type
-        return;
-      }
-
-      // Store the source signature from the detected transaction
-      if (!sourceSignature) {
-        sourceSignature = tx.signature;
-      }
-
-      const parsed = parseResult.data;
-      const parseEnd = Date.now();
-      const parsing = parseEnd - parseStart;
-
-      try {
-        const detection = tx.processedTimestamp - tx.receivedTimestamp;
-
-        const buildResult = await builder.buildTransactionWithTiming(parsed);
-        if (!buildResult.success || !buildResult.timing) {
-          buyError = buildResult.error || 'Build failed';
-          resolve(null);
-          return;
-        }
-
-        const executeResult = await executor.executeTransactionWithTiming(
-          buildResult.transaction!,
-          builder.getBotKeypair(),
-          { blockhash: buildResult.blockhash }
-        );
-
-        if (!executeResult.success || !executeResult.timing || !executeResult.signature) {
-          buyError = executeResult.error || 'Execution failed';
-          resolve(null);
-          return;
-        }
-
-        const building = buildResult.timing.total;
-        const execution = executeResult.timing.total;
-
-        resolve({
-          latency: detection + parsing + building + execution,
-          detection,
-          parsing,
-          building,
-          execution,
-          sourceSignature: sourceSignature!,
-          copySignature: executeResult.signature
-        });
-      } catch (error) {
-        buyError = error instanceof Error ? error.message : 'Unknown error';
-        resolve(null);
-      }
-    };
-
-    detector.onTransaction(handler);
-
-    // Execute source trade
-    if (protocol === 'PUMP_FUN') {
-      executePumpFunBuy(
-        connection,
-        sourceWallet,
-        new PublicKey(testMint!),
-        AMOUNTS.PUMP_FUN_BUY_SOL
-      ).then((sig) => {
-        sourceSignature = sig;
-      }).catch((error) => {
-        console.error(`Buy operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        buyError = `Source transaction failed: ${error instanceof Error ? error.message : error}`;
-        resolve(null);
-      });
-    } else {
-      executePumpSwapBuy(
-        connection,
-        sourceWallet,
-        poolInfo.pool,
-        AMOUNTS.PUMP_SWAP_BUY_SOL
-      ).then((sig) => {
-        sourceSignature = sig;
-      }).catch((error) => {
-        console.error(`Buy operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        resolve(null);
-      });
-    }
-
-    setTimeout(() => {
-      if (!processing) {
-        processing = true;
-        buyError = `Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`;
-        resolve(null);
-      }
-    }, TIMEOUTS.DETECTION_MS);
-  });
-
-  buyResult = await buyPromise;
-  if (!buyResult) return { buy: null, sell: null, buyError, sellError: undefined };
-
-  // Wait for source buy transaction to confirm before executing sell
-  if (!buyResult.sourceSignature) {
-    return { buy: buyResult, sell: null, buyError, sellError: 'No source signature to wait for' };
-  }
-
-  const confirmed = await waitForConfirmation(connection, buyResult.sourceSignature);
-  if (!confirmed) {
-    return { buy: buyResult, sell: null, buyError, sellError: 'Source buy failed to confirm' };
-  }
-
-  // SELL
-  let sellError: string | undefined;
-  const sellPromise = new Promise<TradeResult | null>((resolve) => {
-    let processing = false;
-    let sourceSignature: string | null = null;
-
-    const handler = async (tx: any) => {
-      if (processing || tx.protocol !== protocol) return;
-      processing = true;  // Set synchronously before await
-
-      const parseStart = Date.now();
-      const parseResult = parser.parse(tx);
-
-      if (!parseResult.success) {
-        if ('error' in parseResult) {
-          sellError = parseResult.error;
-          resolve(null);
-        } else {
-          processing = false;  // Reset if filtered
-        }
-        return; // Filtered or error
-      }
-
-      if (parseResult.data.type !== 'SELL') {
-        processing = false;  // Reset if wrong type
-        return;
-      }
-
-      // Store the source signature from the detected transaction
-      if (!sourceSignature) {
-        sourceSignature = tx.signature;
-      }
-
-      const parsed = parseResult.data;
-      const parseEnd = Date.now();
-      const parsing = parseEnd - parseStart;
-
-      try {
-        const detection = tx.processedTimestamp - tx.receivedTimestamp;
-
-        const buildResult = await builder.buildTransactionWithTiming(parsed);
-        if (!buildResult.success || !buildResult.timing) {
-          sellError = buildResult.error || 'Build failed';
-          resolve(null);
-          return;
-        }
-
-        const executeResult = await executor.executeTransactionWithTiming(
-          buildResult.transaction!,
-          builder.getBotKeypair(),
-          { blockhash: buildResult.blockhash }
-        );
-
-        if (!executeResult.success || !executeResult.timing || !executeResult.signature) {
-          sellError = executeResult.error || 'Execution failed';
-          resolve(null);
-          return;
-        }
-
-        resolve({
-          latency: detection + parsing + buildResult.timing.total + executeResult.timing.total,
-          detection,
-          parsing,
-          building: buildResult.timing.total,
-          execution: executeResult.timing.total,
-          sourceSignature: sourceSignature!,
-          copySignature: executeResult.signature
-        });
-      } catch (error) {
-        sellError = error instanceof Error ? error.message : 'Unknown error';
-        resolve(null);
-      }
-    };
-
-    detector.onTransaction(handler);
-
-    // Execute source sell
-    if (protocol === 'PUMP_FUN') {
-      connection.getTokenAccountsByOwner(
-        sourceWallet.publicKey,
-        { mint: new PublicKey(testMint!) }
-      ).then(async (accounts) => {
-        if (accounts.value.length === 0) return resolve(null);
-        const balance = accounts.value[0].account.data.readBigUInt64LE(64);
-        if (balance === 0n) return resolve(null);
-
-        const sellAmount = (balance * BigInt(AMOUNTS.SELL_PERCENTAGE * 100)) / 100n;
-        await executePumpFunSell(
-          connection,
-          sourceWallet,
-          new PublicKey(testMint!),
-          sellAmount
-        );
-      }).catch((error) => {
-        console.error(`Sell operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        sellError = `Source transaction failed: ${error instanceof Error ? error.message : error}`;
-        resolve(null);
-      });
-    } else {
-      connection.getTokenAccountsByOwner(
-        sourceWallet.publicKey,
-        { mint: poolInfo.baseMint }
-      ).then(async (accounts) => {
-        if (accounts.value.length === 0) return resolve(null);
-        const balance = accounts.value[0].account.data.readBigUInt64LE(64);
-        if (balance === 0n) return resolve(null);
-
-        const sellAmount = (balance * BigInt(AMOUNTS.SELL_PERCENTAGE * 100)) / 100n;
-        const sig = await executePumpSwapSell(
-          connection,
-          sourceWallet,
-          poolInfo.pool,
-          sellAmount.toString()
-        );
-        sourceSignature = sig;
-      }).catch((error) => {
-        console.error(`Sell operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        sellError = `Source transaction failed: ${error instanceof Error ? error.message : error}`;
-        resolve(null);
-      });
-    }
-
-    setTimeout(() => {
-      if (!processing) {
-        processing = true;
-        sellError = `Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`;
-        resolve(null);
-      }
-    }, TIMEOUTS.DETECTION_MS);
-  });
-
-  sellResult = await sellPromise;
-  return { buy: buyResult, sell: sellResult, buyError, sellError };
-}
-
 async function main() {
   const startTime = Date.now();
 
@@ -363,26 +53,23 @@ async function main() {
   }
 
   const sourceWallet = Keypair.fromSecretKey(bs58.decode(appConfig.testing.sourceWalletPrivateKey));
-  const detector = new Detector();
-  const parser = new TradeParser();
-  const pumpFunBuilder = new PumpFunTxBuilder();
-  const pumpSwapBuilder = new PumpSwapTxBuilder();
-  const executor = new TransactionExecutor();
+  const botKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.wallet.privateKey));
 
-  // Suppress initialization logs
-  const suppressLog = () => {};
-  const originalLog = console.log;
+  const bot = new CopytradingBot({
+    mode: 'live',
+    watchWallets: [sourceWallet.publicKey.toBase58()]
+  });
 
-  console.log = suppressLog;
-  await pumpFunBuilder.initialize();
-  console.log = originalLog;
+  const executor = new SourceTradeExecutor(connection);
+
+  await bot.initialize();
 
   const sourceBalance = await connection.getBalance(sourceWallet.publicKey);
-  const botBalance = await pumpFunBuilder.getBalance();
+  const botBalance = await connection.getBalance(botKeypair.publicKey);
 
   console.log('\nSetup:');
   console.log(`  Source wallet: ${sourceWallet.publicKey.toBase58().slice(0, 4)}...${sourceWallet.publicKey.toBase58().slice(-4)} (${(sourceBalance / 1e9).toFixed(2)} SOL)`);
-  console.log(`  Bot wallet:    ${pumpFunBuilder.getBotKeypair().publicKey.toBase58().slice(0, 4)}...${pumpFunBuilder.getBotKeypair().publicKey.toBase58().slice(-4)} (${botBalance.toFixed(2)} SOL)`);
+  console.log(`  Bot wallet:    ${botKeypair.publicKey.toBase58().slice(0, 4)}...${botKeypair.publicKey.toBase58().slice(-4)} (${(botBalance / 1e9).toFixed(2)} SOL)`);
 
   process.stdout.write('\nCreating pump.fun token... ');
   const testMint = await createTestToken(connection, sourceWallet);
@@ -400,10 +87,8 @@ async function main() {
   }
   console.log(`${poolInfo.pool.toBase58().slice(0, 4)}...${poolInfo.pool.toBase58().slice(-4)} (${poolInfo.liquidity.toFixed(1)} SOL liquidity)`);
 
-  // Start detector silently
-  console.log = suppressLog;
-  await detector.start([sourceWallet.publicKey.toBase58()]);
-  console.log = originalLog;
+  // Start bot
+  await bot.start();
 
   // Wait for Laserstream connection to stabilize
   await new Promise(resolve => setTimeout(resolve, 5000));
@@ -419,75 +104,161 @@ async function main() {
   const pumpFunSells: TradeResult[] = [];
 
   for (let i = 1; i <= DEFAULTS.NUM_CYCLES; i++) {
-    process.stdout.write(`Cycle ${i}: `);
-    const result = await executeCycle(
-      'PUMP_FUN', i, connection, sourceWallet, detector, parser,
-      pumpFunBuilder, executor, testMint, null
-    );
+    process.stdout.write(`Cycle ${i}: BUY `);
 
-    if (result.buy) {
-      pumpFunBuys.push(result.buy);
-      process.stdout.write(`BUY ${result.buy.latency}ms ✓  `);
-
-      // Queue confirmation check
-      if (result.buy.sourceSignature && result.buy.copySignature) {
-        const confirmationPromise = Promise.all([
-          getTransactionSlot(connection, result.buy.sourceSignature),
-          getTransactionSlot(connection, result.buy.copySignature)
-        ]).then(([sourceSlot, copySlot]) =>
-          sourceSlot && copySlot
-            ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
-            : null
-        );
-
-        pendingConfirmations.push({
-          cycleNum: i,
-          protocol: 'PUMP_FUN',
-          type: 'BUY',
-          processingTimeMs: result.buy.latency,
-          promise: confirmationPromise
-        });
-      }
-    } else {
-      process.stdout.write(`BUY FAIL  `);
-      failedTrades.push({
-        cycle: i,
-        protocol: 'PUMP.FUN',
-        type: 'BUY',
-        error: result.buyError || 'Unknown error'
+    try {
+      // Start listening first
+      const buyResultPromise = new Promise<any>((resolve, reject) => {
+        const handler: any = {
+          handle: (event: any) => {
+            if (event.type === 'executionSuccess' && event.parsed.protocol === 'PUMP_FUN' && event.parsed.type === 'BUY') {
+              bot.removeHandler(handler);
+              resolve({
+                timing: {
+                  detection: event.detectionTime,
+                  parsing: event.parsingTime,
+                  building: event.buildTime,
+                  execution: event.execTime,
+                  total: event.detectionTime + event.parsingTime + event.buildTime + event.execTime
+                },
+                sourceSignature: event.parsed.signature,
+                copySignature: event.signature
+              });
+            } else if (event.type === 'buildFailed' || event.type === 'executionFailed') {
+              if (event.parsed.protocol === 'PUMP_FUN' && event.parsed.type === 'BUY') {
+                bot.removeHandler(handler);
+                reject(new Error(event.error));
+              }
+            }
+          }
+        };
+        bot.addHandler(handler);
+        setTimeout(() => {
+          bot.removeHandler(handler);
+          reject(new Error(`Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`));
+        }, TIMEOUTS.DETECTION_MS);
       });
-    }
 
-    if (result.sell) {
-      pumpFunSells.push(result.sell);
-      process.stdout.write(`SELL ${result.sell.latency}ms ✓\n`);
+      // Now execute the trade
+      await executor.executeTrade(sourceWallet, {
+        protocol: 'PUMP_FUN',
+        type: 'BUY',
+        mint: testMint
+      });
+
+      const buyResult = await buyResultPromise;
+
+      pumpFunBuys.push({
+        latency: buyResult.timing.total,
+        detection: buyResult.timing.detection,
+        parsing: buyResult.timing.parsing,
+        building: buyResult.timing.building,
+        execution: buyResult.timing.execution,
+        sourceSignature: buyResult.sourceSignature,
+        copySignature: buyResult.copySignature
+      });
+
+      process.stdout.write(`${buyResult.timing.total}ms ✓  SELL `);
+
+      // Wait for buy confirmation before executing sell
+      await waitForBuyConfirmation(connection, buyResult.copySignature);
 
       // Queue confirmation check
-      if (result.sell.sourceSignature && result.sell.copySignature) {
-        const confirmationPromise = Promise.all([
-          getTransactionSlot(connection, result.sell.sourceSignature),
-          getTransactionSlot(connection, result.sell.copySignature)
-        ]).then(([sourceSlot, copySlot]) =>
-          sourceSlot && copySlot
-            ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
-            : null
-        );
+      const confirmationPromise = Promise.all([
+        getTransactionSlot(connection, buyResult.sourceSignature),
+        getTransactionSlot(connection, buyResult.copySignature)
+      ]).then(([sourceSlot, copySlot]) =>
+        sourceSlot && copySlot
+          ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
+          : null
+      );
 
-        pendingConfirmations.push({
-          cycleNum: i,
-          protocol: 'PUMP_FUN',
-          type: 'SELL',
-          processingTimeMs: result.sell.latency,
-          promise: confirmationPromise
-        });
-      }
-    } else {
-      process.stdout.write(`SELL FAIL\n`);
+      pendingConfirmations.push({
+        cycleNum: i,
+        protocol: 'PUMP_FUN',
+        type: 'BUY',
+        processingTimeMs: buyResult.timing.total,
+        promise: confirmationPromise
+      });
+
+      // Start listening for sell first
+      const sellResultPromise = new Promise<any>((resolve, reject) => {
+        const handler: any = {
+          handle: (event: any) => {
+            if (event.type === 'executionSuccess' && event.parsed.protocol === 'PUMP_FUN' && event.parsed.type === 'SELL') {
+              bot.removeHandler(handler);
+              resolve({
+                timing: {
+                  detection: event.detectionTime,
+                  parsing: event.parsingTime,
+                  building: event.buildTime,
+                  execution: event.execTime,
+                  total: event.detectionTime + event.parsingTime + event.buildTime + event.execTime
+                },
+                sourceSignature: event.parsed.signature,
+                copySignature: event.signature
+              });
+            } else if (event.type === 'buildFailed' || event.type === 'executionFailed') {
+              if (event.parsed.protocol === 'PUMP_FUN' && event.parsed.type === 'SELL') {
+                bot.removeHandler(handler);
+                reject(new Error(event.error));
+              }
+            }
+          }
+        };
+        bot.addHandler(handler);
+        setTimeout(() => {
+          bot.removeHandler(handler);
+          reject(new Error(`Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`));
+        }, TIMEOUTS.DETECTION_MS);
+      });
+
+      // Now execute the sell trade
+      await executor.executeTrade(sourceWallet, {
+        protocol: 'PUMP_FUN',
+        type: 'SELL',
+        mint: testMint
+      });
+
+      const sellResult = await sellResultPromise;
+
+      pumpFunSells.push({
+        latency: sellResult.timing.total,
+        detection: sellResult.timing.detection,
+        parsing: sellResult.timing.parsing,
+        building: sellResult.timing.building,
+        execution: sellResult.timing.execution,
+        sourceSignature: sellResult.sourceSignature,
+        copySignature: sellResult.copySignature
+      });
+
+      process.stdout.write(`${sellResult.timing.total}ms ✓\n`);
+
+      // Queue confirmation check
+      const sellConfirmationPromise = Promise.all([
+        getTransactionSlot(connection, sellResult.sourceSignature),
+        getTransactionSlot(connection, sellResult.copySignature)
+      ]).then(([sourceSlot, copySlot]) =>
+        sourceSlot && copySlot
+          ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
+          : null
+      );
+
+      pendingConfirmations.push({
+        cycleNum: i,
+        protocol: 'PUMP_FUN',
+        type: 'SELL',
+        processingTimeMs: sellResult.timing.total,
+        promise: sellConfirmationPromise
+      });
+
+    } catch (error: any) {
+      process.stdout.write(`FAIL: ${error.message}\n`);
       failedTrades.push({
         cycle: i,
         protocol: 'PUMP.FUN',
-        type: 'SELL',
-        error: result.sellError || 'Unknown error'
+        type: error.message.includes('SELL') ? 'SELL' : 'BUY',
+        error: error.message
       });
     }
 
@@ -501,75 +272,162 @@ async function main() {
   const pumpSwapSells: TradeResult[] = [];
 
   for (let i = 1; i <= DEFAULTS.NUM_CYCLES; i++) {
-    process.stdout.write(`Cycle ${i}: `);
-    const result = await executeCycle(
-      'PUMP_SWAP', i, connection, sourceWallet, detector, parser,
-      pumpSwapBuilder, executor, null, poolInfo
-    );
+    process.stdout.write(`Cycle ${i}: BUY `);
 
-    if (result.buy) {
-      pumpSwapBuys.push(result.buy);
-      process.stdout.write(`BUY ${result.buy.latency}ms ✓  `);
-
-      // Queue confirmation check
-      if (result.buy.sourceSignature && result.buy.copySignature) {
-        const confirmationPromise = Promise.all([
-          getTransactionSlot(connection, result.buy.sourceSignature),
-          getTransactionSlot(connection, result.buy.copySignature)
-        ]).then(([sourceSlot, copySlot]) =>
-          sourceSlot && copySlot
-            ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
-            : null
-        );
-
-        pendingConfirmations.push({
-          cycleNum: i,
-          protocol: 'PUMP_SWAP',
-          type: 'BUY',
-          processingTimeMs: result.buy.latency,
-          promise: confirmationPromise
-        });
-      }
-    } else {
-      process.stdout.write(`BUY FAIL  `);
-      failedTrades.push({
-        cycle: i,
-        protocol: 'PUMPSWAP',
-        type: 'BUY',
-        error: result.buyError || 'Unknown error'
+    try {
+      // Start listening for buy first
+      const buyResultPromise = new Promise<any>((resolve, reject) => {
+        const handler: any = {
+          handle: (event: any) => {
+            if (event.type === 'executionSuccess' && event.parsed.protocol === 'PUMP_SWAP' && event.parsed.type === 'BUY') {
+              bot.removeHandler(handler);
+              resolve({
+                timing: {
+                  detection: event.detectionTime,
+                  parsing: event.parsingTime,
+                  building: event.buildTime,
+                  execution: event.execTime,
+                  total: event.detectionTime + event.parsingTime + event.buildTime + event.execTime
+                },
+                sourceSignature: event.parsed.signature,
+                copySignature: event.signature
+              });
+            } else if (event.type === 'buildFailed' || event.type === 'executionFailed') {
+              if (event.parsed.protocol === 'PUMP_SWAP' && event.parsed.type === 'BUY') {
+                bot.removeHandler(handler);
+                reject(new Error(event.error));
+              }
+            }
+          }
+        };
+        bot.addHandler(handler);
+        setTimeout(() => {
+          bot.removeHandler(handler);
+          reject(new Error(`Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`));
+        }, TIMEOUTS.DETECTION_MS);
       });
-    }
 
-    if (result.sell) {
-      pumpSwapSells.push(result.sell);
-      process.stdout.write(`SELL ${result.sell.latency}ms ✓\n`);
+      // Now execute the buy trade
+      await executor.executeTrade(sourceWallet, {
+        protocol: 'PUMP_SWAP',
+        type: 'BUY',
+        pool: poolInfo.pool
+      });
+
+      const buyResult = await buyResultPromise;
+
+      pumpSwapBuys.push({
+        latency: buyResult.timing.total,
+        detection: buyResult.timing.detection,
+        parsing: buyResult.timing.parsing,
+        building: buyResult.timing.building,
+        execution: buyResult.timing.execution,
+        sourceSignature: buyResult.sourceSignature,
+        copySignature: buyResult.copySignature
+      });
+
+      process.stdout.write(`${buyResult.timing.total}ms ✓  SELL `);
+
+      // Wait for buy confirmation before executing sell
+      await waitForBuyConfirmation(connection, buyResult.copySignature);
 
       // Queue confirmation check
-      if (result.sell.sourceSignature && result.sell.copySignature) {
-        const confirmationPromise = Promise.all([
-          getTransactionSlot(connection, result.sell.sourceSignature),
-          getTransactionSlot(connection, result.sell.copySignature)
-        ]).then(([sourceSlot, copySlot]) =>
-          sourceSlot && copySlot
-            ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
-            : null
-        );
+      const confirmationPromise = Promise.all([
+        getTransactionSlot(connection, buyResult.sourceSignature),
+        getTransactionSlot(connection, buyResult.copySignature)
+      ]).then(([sourceSlot, copySlot]) =>
+        sourceSlot && copySlot
+          ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
+          : null
+      );
 
-        pendingConfirmations.push({
-          cycleNum: i,
-          protocol: 'PUMP_SWAP',
-          type: 'SELL',
-          processingTimeMs: result.sell.latency,
-          promise: confirmationPromise
-        });
-      }
-    } else {
-      process.stdout.write(`SELL FAIL\n`);
+      pendingConfirmations.push({
+        cycleNum: i,
+        protocol: 'PUMP_SWAP',
+        type: 'BUY',
+        processingTimeMs: buyResult.timing.total,
+        promise: confirmationPromise
+      });
+
+      // Start listening for sell first
+      const sellResultPromise = new Promise<any>((resolve, reject) => {
+        const handler: any = {
+          handle: (event: any) => {
+            if (event.type === 'executionSuccess' && event.parsed.protocol === 'PUMP_SWAP' && event.parsed.type === 'SELL') {
+              bot.removeHandler(handler);
+              resolve({
+                timing: {
+                  detection: event.detectionTime,
+                  parsing: event.parsingTime,
+                  building: event.buildTime,
+                  execution: event.execTime,
+                  total: event.detectionTime + event.parsingTime + event.buildTime + event.execTime
+                },
+                sourceSignature: event.parsed.signature,
+                copySignature: event.signature
+              });
+            } else if (event.type === 'buildFailed' || event.type === 'executionFailed') {
+              if (event.parsed.protocol === 'PUMP_SWAP' && event.parsed.type === 'SELL') {
+                bot.removeHandler(handler);
+                reject(new Error(event.error));
+              }
+            }
+          }
+        };
+        bot.addHandler(handler);
+        setTimeout(() => {
+          bot.removeHandler(handler);
+          reject(new Error(`Timeout: No transaction detected after ${TIMEOUTS.DETECTION_MS / 1000}s`));
+        }, TIMEOUTS.DETECTION_MS);
+      });
+
+      // Now execute the sell trade
+      await executor.executeTrade(sourceWallet, {
+        protocol: 'PUMP_SWAP',
+        type: 'SELL',
+        pool: poolInfo.pool,
+        baseMint: poolInfo.baseMint
+      });
+
+      const sellResult = await sellResultPromise;
+
+      pumpSwapSells.push({
+        latency: sellResult.timing.total,
+        detection: sellResult.timing.detection,
+        parsing: sellResult.timing.parsing,
+        building: sellResult.timing.building,
+        execution: sellResult.timing.execution,
+        sourceSignature: sellResult.sourceSignature,
+        copySignature: sellResult.copySignature
+      });
+
+      process.stdout.write(`${sellResult.timing.total}ms ✓\n`);
+
+      // Queue confirmation check
+      const sellConfirmationPromise = Promise.all([
+        getTransactionSlot(connection, sellResult.sourceSignature),
+        getTransactionSlot(connection, sellResult.copySignature)
+      ]).then(([sourceSlot, copySlot]) =>
+        sourceSlot && copySlot
+          ? { sourceSlot, copySlot, blockDistance: copySlot - sourceSlot }
+          : null
+      );
+
+      pendingConfirmations.push({
+        cycleNum: i,
+        protocol: 'PUMP_SWAP',
+        type: 'SELL',
+        processingTimeMs: sellResult.timing.total,
+        promise: sellConfirmationPromise
+      });
+
+    } catch (error: any) {
+      process.stdout.write(`FAIL: ${error.message}\n`);
       failedTrades.push({
         cycle: i,
         protocol: 'PUMPSWAP',
-        type: 'SELL',
-        error: result.sellError || 'Unknown error'
+        type: error.message.includes('SELL') ? 'SELL' : 'BUY',
+        error: error.message
       });
     }
 
@@ -609,8 +467,7 @@ async function main() {
     });
   }
 
-  detector.stop();
-  pumpFunBuilder.cleanup();
+  await bot.stop();
 
   // RESULTS
   console.log('\n' + '━'.repeat(60));

@@ -87,7 +87,7 @@ export class Logger {
       this.writeToFile(`[${time}] SIM - ${protocolLabel} ${typeLabel}`);
 
       if (data.copyAmount !== undefined) {
-        const amountText = data.copyAmount === -1 ? 'ALL tokens' : `${data.copyAmount} SOL`;
+        const amountText = data.type === 'sell' ? `${data.copyAmount}%` : `${data.copyAmount} SOL`;
         console.log(`    Amount: ${amountText}`);
         this.writeToFile(`    Amount: ${amountText}`);
       }
@@ -111,7 +111,7 @@ export class Logger {
       this.writeToFile(`[${time}] COPY - ${protocolLabel} ${typeLabel}`);
 
       if (data.copyAmount !== undefined) {
-        const amountText = data.copyAmount === -1 ? 'ALL tokens' : `${data.copyAmount} SOL`;
+        const amountText = data.type === 'sell' ? `${data.copyAmount}%` : `${data.copyAmount} SOL`;
         console.log(`    Amount: ${amountText}`);
         this.writeToFile(`    Amount: ${amountText}`);
       }

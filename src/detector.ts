@@ -58,10 +58,12 @@ export class Detector {
       const walletsToWatch = overrideWallets || appConfig.trading.watchWallets;
       this.watchedWallets = walletsToWatch;
 
-      console.log(`Starting unified detector`);
-      console.log(`Watching wallets: ${walletsToWatch.join(', ')}`);
-      console.log(`pump.fun enabled: ${appConfig.trading.protocols.pumpFun.enabled}`);
-      console.log(`PumpSwap enabled: ${appConfig.trading.protocols.pumpSwap.enabled}`);
+      if (process.env.NODE_ENV !== 'test') {
+        console.log(`Starting detector`);
+        console.log(`Watching wallets: ${walletsToWatch.join(', ')}`);
+        console.log(`pump.fun enabled: ${appConfig.trading.protocols.pumpFun.enabled}`);
+        console.log(`PumpSwap enabled: ${appConfig.trading.protocols.pumpSwap.enabled}`);
+      }
 
       // Build subscription with separate keys for each protocol
       const transactions: any = {};
@@ -109,9 +111,11 @@ export class Detector {
         (error: any) => console.error("Stream error:", error)
       );
 
-      console.log('Stream subscribed successfully');
-      console.log('─'.repeat(60));
-      console.log();
+      if (process.env.NODE_ENV !== 'test') {
+        console.log('Stream subscribed successfully');
+        console.log('─'.repeat(60));
+        console.log();
+      }
 
     } catch (error) {
       console.error("Failed to start detector:", error);
