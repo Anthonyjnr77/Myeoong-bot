@@ -412,7 +412,15 @@ async function validateTokenAccountCreation(): Promise<ValidationResult> {
 async function validateOptionalConfigs(): Promise<ValidationResult[]> {
   const results: ValidationResult[] = [];
 
-  if (!process.env.WATCH_WALLETS || !process.env.WATCH_WALLETS.trim()) {
+  // Common placeholder values
+  const placeholders = ['wallet1_address', 'wallet2_address', 'your_'];
+
+  // Check if WATCH_WALLETS is not set or has placeholder values (treat both as not set)
+  const watchWalletsNotSet = !process.env.WATCH_WALLETS ||
+                              !process.env.WATCH_WALLETS.trim() ||
+                              placeholders.some(ph => process.env.WATCH_WALLETS!.includes(ph));
+
+  if (watchWalletsNotSet) {
     results.push({
       passed: true,
       message: 'WATCH_WALLETS not set',
@@ -420,7 +428,11 @@ async function validateOptionalConfigs(): Promise<ValidationResult[]> {
     });
   }
 
-  if (!process.env.SOURCE_WALLET_PRIVATE_KEY) {
+  // Check if SOURCE_WALLET_PRIVATE_KEY is not set or has placeholder values
+  const sourceKeyNotSet = !process.env.SOURCE_WALLET_PRIVATE_KEY ||
+                          placeholders.some(ph => process.env.SOURCE_WALLET_PRIVATE_KEY!.includes(ph));
+
+  if (sourceKeyNotSet) {
     results.push({
       passed: true,
       message: 'SOURCE_WALLET_PRIVATE_KEY not set',

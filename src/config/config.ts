@@ -216,11 +216,15 @@ class ConfigValidator {
   static validate(): CopyTradingConfig {
     this.validateEnvironment();
 
-    // Parse wallets from environment variable
+    // Common placeholder values to filter out
+    const placeholders = ['wallet1_address', 'wallet2_address', 'your_'];
+
+    // Parse wallets from environment variable, filtering out placeholders
     const watchWallets = process.env.WATCH_WALLETS
       ?.split(',')
       .map(w => w.trim())
-      .filter(w => w.length > 0) || [];
+      .filter(w => w.length > 0)
+      .filter(w => !placeholders.some(ph => w.includes(ph))) || [];
 
     // Parse all configuration from environment with defaults
     const mode = (process.env.MODE || 'live') as 'simulate' | 'live';
