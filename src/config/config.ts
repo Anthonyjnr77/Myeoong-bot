@@ -47,7 +47,7 @@ export const PUMP_SWAP_CONSTANTS = {
 
 // Test and operational constants
 export const SELL_PERCENTAGE = 0.5;
-export const GAS_UNIT_LIMIT = 250_000;
+export const GAS_UNIT_LIMIT = 400_000;
 export const GAS_UNIT_PRICE = 250_000;
 export const PUMP_FUN_CREATE_SOL = 0.0001; // Token creation fee, not configurable
 export const PUMPSWAP_SLIPPAGE = 10; // PumpSwap slippage percentage

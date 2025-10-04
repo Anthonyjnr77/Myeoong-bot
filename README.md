@@ -86,7 +86,7 @@ pnpm demo
 
 **Option B: Run Live Bot**
 ```bash
-pnpm bot -- --wallets=WALLET_ADDRESS_TO_WATCH
+pnpm bot --wallets=WALLET_ADDRESS_TO_WATCH
 ```
 - **Requires**: `BOT_WALLET_PRIVATE_KEY` in .env
 - Monitors specified wallet(s) and copies their trades in real-time
@@ -122,8 +122,8 @@ pnpm demo
 High-volume performance testing:
 ```bash
 pnpm latency                           # Default: 20 operations per protocol
-pnpm latency -- --operations=50        # Custom operation count
-pnpm latency -- --sdk-operations=30    # Custom SDK comparison count
+pnpm latency --operations=50           # Custom operation count
+pnpm latency --sdk-operations=30       # Custom SDK comparison count
 ```
 
 **What it measures:**
@@ -162,14 +162,14 @@ Start the bot:
 pnpm bot
 
 # Or specify wallets via CLI (overrides .env)
-pnpm bot -- --wallets=WALLET_ADDRESS
+pnpm bot --wallets=WALLET_ADDRESS
 
 # Specify mode (defaults to .env MODE or 'live')
-pnpm bot -- --mode=simulate
-pnpm bot -- --mode=live
+pnpm bot --mode=simulate
+pnpm bot --mode=live
 
 # Both options
-pnpm bot -- --wallets=WALLET1,WALLET2 --mode=simulate
+pnpm bot --wallets=WALLET1,WALLET2 --mode=simulate
 ```
 
 **Configuration priority:**
@@ -199,16 +199,16 @@ pnpm trades
 pnpm trades buy
 
 # Simple pump.fun sell
-pnpm trades -- sell --token=TOKEN_ADDRESS
+pnpm trades sell --token=TOKEN_ADDRESS
 
 # Buy with custom amount
-pnpm trades -- buy --amount=0.01
+pnpm trades buy --amount=0.01
 
 # PumpSwap buy (finds pool automatically)
-pnpm trades -- buy --pumpswap
+pnpm trades buy --pumpswap
 
 # PumpSwap with specific pool
-pnpm trades -- buy --pool=POOL_ADDRESS
+pnpm trades buy --pool=POOL_ADDRESS
 
 # Test both protocols (buy+sell on both pump.fun and PumpSwap)
 pnpm trades pump
@@ -222,10 +222,10 @@ pnpm trades pump
 **Example workflow:**
 ```bash
 # Terminal 1
-pnpm bot -- --mode=simulate
+pnpm bot --mode=simulate
 
 # Terminal 2 (wait for bot to start)
-pnpm trades -- buysell
+pnpm trades buysell
 # Watch Terminal 1 for detection → execution output
 ```
 
