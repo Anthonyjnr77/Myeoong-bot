@@ -1,11 +1,5 @@
 // src/detector.ts
-import {
-  subscribe,
-  CommitmentLevel,
-  LaserstreamConfig,
-  SubscribeRequest,
-  SubscribeUpdate
-} from 'helius-laserstream';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { appConfig, PUMP_FUN_CONSTANTS, PUMP_SWAP_CONSTANTS } from './config/config';
 import bs58 from 'bs58';
 import { logError } from './utils/errors';
@@ -26,12 +20,19 @@ export interface DetectedTransaction {
 }
 
 export class Detector {
-  private stream: any = null;
+  private connection: Connection;
+  private logSubscriptions: number[] = [];
   private isRunning = false;
   private transactionCallback: ((transaction: DetectedTransaction) => void) | null = null;
   private watchedWallets: string[] = [];
   private seenSignatures: Set<string> = new Set();
   private readonly MAX_SIGNATURES = 1000;
+
+  constructor() {
+    this.connection = new Connection(appConfig.rpc.endpoint, {
+      commitment: appConfig.rpc.commitment
+    });
+  }
 
   onTransaction(callback: (transaction: DetectedTransaction) => void): void {
     this.transactionCallback = callback;
@@ -49,11 +50,6 @@ export class Detector {
     this.isRunning = true;
 
     try {
-      const config: LaserstreamConfig = {
-        apiKey: appConfig.laserstream.apiKey,
-        endpoint: appConfig.laserstream.endpoint,
-      };
-
       // Use override wallets if provided, otherwise use config
       const walletsToWatch = overrideWallets || appConfig.trading.watchWallets;
       this.watchedWallets = walletsToWatch;
@@ -65,54 +61,25 @@ export class Detector {
         console.log(`PumpSwap enabled: ${appConfig.trading.protocols.pumpSwap.enabled}`);
       }
 
-      // Build subscription with separate keys for each protocol
-      const transactions: any = {};
-
-      if (appConfig.trading.protocols.pumpFun.enabled) {
-        transactions.pumpFun = {
-          accountInclude: walletsToWatch,
-          accountExclude: [],
-          accountRequired: [PUMP_FUN_CONSTANTS.PROGRAM_ID],
-          vote: false,
-          failed: false
-        };
-      }
-
-      if (appConfig.trading.protocols.pumpSwap.enabled) {
-        transactions.pumpSwap = {
-          accountInclude: walletsToWatch,
-          accountExclude: [],
-          accountRequired: [PUMP_SWAP_CONSTANTS.PROGRAM_ID],
-          vote: false,
-          failed: false
-        };
-      }
-
-      if (Object.keys(transactions).length === 0) {
+      if (!appConfig.trading.protocols.pumpFun.enabled && !appConfig.trading.protocols.pumpSwap.enabled) {
         throw new Error('No protocols enabled - cannot start detector');
       }
 
-      const subscriptionRequest: SubscribeRequest = {
-        transactions,
-        commitment: CommitmentLevel.PROCESSED,
-        accounts: {},
-        slots: {},
-        transactionsStatus: {},
-        blocks: {},
-        blocksMeta: {},
-        entry: {},
-        accountsDataSlice: [],
-      };
-
-      this.stream = await subscribe(
-        config,
-        subscriptionRequest,
-        async (update: SubscribeUpdate) => this.handleIncomingData(update),
-        (error: any) => console.error("Stream error:", error)
-      );
+      for (const wallet of walletsToWatch) {
+        const subscriptionId = await this.connection.onLogs(
+          new PublicKey(wallet),
+          (logs) => {
+            if (!logs.err) {
+              void this.handleSignature(logs.signature);
+            }
+          },
+          appConfig.rpc.commitment
+        );
+        this.logSubscriptions.push(subscriptionId);
+      }
 
       if (process.env.NODE_ENV !== 'test') {
-        console.log('Stream subscribed successfully');
+        console.log('RPC WebSocket subscribed successfully');
         console.log('─'.repeat(60));
         console.log();
       }
@@ -121,6 +88,66 @@ export class Detector {
       console.error("Failed to start detector:", error);
       this.isRunning = false;
       throw error;
+    }
+  }
+
+  private async handleSignature(signature: string): Promise<void> {
+    const receivedTimestamp = Date.now();
+
+    if (this.seenSignatures.has(signature)) {
+      return;
+    }
+
+    try {
+      const transaction = await this.connection.getTransaction(signature, {
+        commitment: appConfig.rpc.commitment,
+        maxSupportedTransactionVersion: 0
+      });
+
+      if (!transaction || transaction.meta?.err) {
+        return;
+      }
+
+      const accountKeys = transaction.transaction.message.accountKeys.map(key => key.toBase58());
+      const instructions = transaction.transaction.message.instructions.map(instruction => ({
+        programIdIndex: instruction.programIdIndex,
+        accounts: Array.from(instruction.accounts),
+        data: bs58.decode(instruction.data)
+      }));
+      const innerInstructions = transaction.meta.innerInstructions?.flatMap(group =>
+        group.instructions.map(instruction => ({
+          programIdIndex: instruction.programIdIndex,
+          accounts: Array.from(instruction.accounts),
+          data: bs58.decode(instruction.data)
+        }))
+      ) || [];
+
+      this.seenSignatures.add(signature);
+      if (this.seenSignatures.size > this.MAX_SIGNATURES) {
+        const signatures = Array.from(this.seenSignatures);
+        this.seenSignatures = new Set(signatures.slice(-this.MAX_SIGNATURES));
+      }
+
+      const allInstructions = [...instructions, ...innerInstructions];
+      const processedTimestamp = Date.now();
+      const detectedTransaction: DetectedTransaction = {
+        signature,
+        accountKeys,
+        instructions: allInstructions,
+        meta: transaction.meta,
+        slot: transaction.slot,
+        timestamp: (transaction.blockTime || Math.floor(Date.now() / 1000)) * 1000,
+        receivedTimestamp,
+        processedTimestamp,
+        protocol: this.identifyProtocol(accountKeys, allInstructions),
+        watchedWallets: this.watchedWallets
+      };
+
+      if (this.transactionCallback) {
+        this.transactionCallback(detectedTransaction);
+      }
+    } catch (error) {
+      logError('Detector', 'Handle transaction exception', error);
     }
   }
 
@@ -243,14 +270,12 @@ export class Detector {
 
     this.isRunning = false;
 
-    if (this.stream) {
-      try {
-        this.stream.close();
-      } catch (error) {
-        // Ignore close errors
-      }
-      this.stream = null;
+    for (const subscriptionId of this.logSubscriptions) {
+      void this.connection.removeOnLogsListener(subscriptionId).catch(() => {
+        // Ignore listener cleanup errors during shutdown.
+      });
     }
+    this.logSubscriptions = [];
 
     this.transactionCallback = null;
   }

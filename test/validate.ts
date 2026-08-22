@@ -1,10 +1,9 @@
 // Suppress bigint warning
 process.env.NODE_NO_WARNINGS = '1';
 import 'dotenv/config';
-import { Connection, Keypair, PublicKey } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, SystemProgram } from '@solana/web3.js';
 import { getAssociatedTokenAddress } from '@solana/spl-token';
 import bs58 from 'bs58';
-import { subscribe } from 'helius-laserstream';
 
 interface ValidationResult {
   passed: boolean;
@@ -18,7 +17,6 @@ async function validateEnvironmentVariables(): Promise<ValidationResult[]> {
   const required = [
     'HELIUS_API_KEY',
     'HELIUS_RPC_ENDPOINT',
-    'LASERSTREAM_ENDPOINT',
     'BOT_WALLET_PRIVATE_KEY'
   ];
 
@@ -276,105 +274,20 @@ async function validateLaserstreamConnection(): Promise<ValidationResult> {
               message: 'Laserstream connection successful'
             });
           }
-        }, 2000); // Increased to 2 seconds
-      }).catch((error) => {
-        // Catch promise rejection
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          cleanup();
-          resolve({
+      async function validateWebSocketConnection(): Promise<ValidationResult> {
+        try {
+          const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT!, { commitment: 'processed' });
+          const subscriptionId = await connection.onLogs(SystemProgram.programId, () => {}, 'processed');
+          await connection.removeOnLogsListener(subscriptionId);
+          return { passed: true, message: 'RPC WebSocket connection successful' };
+        } catch (error) {
+          return {
             passed: false,
-            message: `Laserstream connection failed: ${error.message || 'Unknown error'}`,
-            solution: 'Check LASERSTREAM_ENDPOINT and HELIUS_API_KEY in .env'
-          });
+            message: `RPC WebSocket connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            solution: 'Check HELIUS_RPC_ENDPOINT and HELIUS_API_KEY in .env'
+          };
         }
-      });
-    });
-  } catch (error) {
-    return {
-      passed: false,
-      message: `Laserstream validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      solution: 'Check LASERSTREAM_ENDPOINT and HELIUS_API_KEY in .env'
-    };
-  }
-}
-
-async function validateWalletBalances(): Promise<ValidationResult[]> {
-  const results: ValidationResult[] = [];
-
-  // Validate bot wallet balance
-  try {
-    if (!process.env.HELIUS_RPC_ENDPOINT || !process.env.BOT_WALLET_PRIVATE_KEY) {
-      throw new Error('Missing configuration');
-    }
-
-    const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT);
-    const keypair = Keypair.fromSecretKey(bs58.decode(process.env.BOT_WALLET_PRIVATE_KEY));
-    const balance = await connection.getBalance(keypair.publicKey);
-    const balanceSol = balance / 1e9;
-
-    const MIN_BALANCE = 0.1;
-
-    if (balanceSol < MIN_BALANCE) {
-      results.push({
-        passed: false,
-        message: `Bot wallet balance too low: ${balanceSol.toFixed(4)} SOL (need >${MIN_BALANCE} SOL)`,
-        solution: 'Fund bot wallet at https://faucet.solana.com'
-      });
-    } else {
-      results.push({
-        passed: true,
-        message: `Bot wallet balance: ${balanceSol.toFixed(4)} SOL`
-      });
-    }
-  } catch (error) {
-    results.push({
-      passed: false,
-      message: `Bot wallet balance check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      solution: 'Ensure RPC connection and bot wallet are configured correctly'
-    });
-  }
-
-  // Validate source wallet balance (optional)
-  // Common placeholder values
-  const placeholders = ['your_source_wallet_base58_private_key', 'your_'];
-
-  const sourceKeySet = process.env.SOURCE_WALLET_PRIVATE_KEY &&
-                       !placeholders.some(ph => process.env.SOURCE_WALLET_PRIVATE_KEY!.includes(ph));
-
-  if (sourceKeySet) {
-    try {
-      if (!process.env.HELIUS_RPC_ENDPOINT) {
-        throw new Error('Missing RPC configuration');
       }
-
-      const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT);
-      const keypair = Keypair.fromSecretKey(bs58.decode(process.env.SOURCE_WALLET_PRIVATE_KEY!));
-      const balance = await connection.getBalance(keypair.publicKey);
-      const balanceSol = balance / 1e9;
-
-      const MIN_BALANCE = 0.1;
-
-      if (balanceSol < MIN_BALANCE) {
-        results.push({
-          passed: false,
-          message: `Source wallet balance too low: ${balanceSol.toFixed(4)} SOL (need >${MIN_BALANCE} SOL)`,
-          solution: 'Fund source wallet at https://faucet.solana.com'
-        });
-      } else {
-        results.push({
-          passed: true,
-          message: `Source wallet balance: ${balanceSol.toFixed(4)} SOL`
-        });
-      }
-    } catch (error) {
-      results.push({
-        passed: false,
-        message: `Source wallet balance check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        solution: 'Ensure source wallet private key is valid'
-      });
-    }
   }
 
   return results;
@@ -542,8 +455,8 @@ async function main() {
   }
 
   const rpcResult = await validateRPCConnection();
-  const laserstreamResult = await validateLaserstreamConnection();
-  if (!printResults('Connections', [rpcResult, laserstreamResult])) {
+  const websocketResult = await validateWebSocketConnection();
+  if (!printResults('Connections', [rpcResult, websocketResult])) {
     overallPassed = false;
   }
 

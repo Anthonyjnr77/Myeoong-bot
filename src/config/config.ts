@@ -135,7 +135,7 @@ class ConfigValidator {
   }
 
   private static validateEnvironment(): void {
-    const required = ['HELIUS_API_KEY', 'HELIUS_RPC_ENDPOINT', 'LASERSTREAM_ENDPOINT', 'BOT_WALLET_PRIVATE_KEY'];
+    const required = ['HELIUS_API_KEY', 'HELIUS_RPC_ENDPOINT', 'BOT_WALLET_PRIVATE_KEY'];
     const missing = required.filter(key => !process.env[key]);
 
     if (missing.length > 0) {
@@ -295,7 +295,7 @@ class ConfigValidator {
         commitment: rpcCommitment
       },
       laserstream: {
-        endpoint: process.env.LASERSTREAM_ENDPOINT!,
+        endpoint: process.env.LASERSTREAM_ENDPOINT || '',
         apiKey: process.env.HELIUS_API_KEY!
       },
       trading: {
