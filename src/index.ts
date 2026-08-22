@@ -13,7 +13,8 @@ import { TelegramHandler } from './bot/handlers/TelegramHandler';
 import bs58 from 'bs58';
 import fs from 'fs';
 import path from 'path';
-import { createServer, Server } from 'http';
+const express = require('express') as any;
+import { TelegramBot } from './utils/telegram';
 
 // Parse CLI arguments
 const args = process.argv.slice(2);
@@ -167,12 +168,34 @@ async function main() {
   console.log('═'.repeat(60));
   console.log('Listening for trades...\n');
 
-  const healthServer: Server = createServer((_request, response) => {
-    response.writeHead(200, { 'Content-Type': 'text/plain' });
-    response.end('copytrader is running\n');
-  });
+  const app = express();
+  app.use(express.json());
+  app.get('/', (_request: unknown, response: { status: (code: number) => { send: (body: string) => void } }) => response.status(200).send('copytrader is running\n'));
   const port = Number(process.env.PORT || 10000);
-  healthServer.listen(port, '0.0.0.0');
+  const healthServer = app.listen(port, '0.0.0.0');
+
+  const telegram = new TelegramBot({
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    chatId: process.env.TELEGRAM_CHAT_ID,
+    extended: process.env.TELEGRAM_EXTENDED === 'true',
+    webhookMode: process.env.TELEGRAM_WEBHOOK_MODE !== 'false',
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
+    webhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
+    callbacks: {
+      getPaused: () => bot.getPaused(),
+      setPaused: paused => bot.setPaused(paused),
+      getStatus: () => ({
+        openPositions: 0,
+        balance: 'unavailable',
+        channels: watchWallets.length,
+        primaryServiceConnected: true
+      }),
+      getStats: () => metrics.getStats ? JSON.stringify(metrics.getStats()) : 'Stats unavailable',
+      getSettings: () => `Mode: ${mode}\nWallets: ${watchWallets.length}\nProtocols: pump.fun, PumpSwap`,
+    }
+  });
+  await telegram.start(app);
+  await telegram.sendAlert(`<b>BOT ACTIVE</b>\nMode: <code>${mode.toUpperCase()}</code>\nWatching: <code>${watchWallets.length}</code> wallets.`);
 
   // Start bot
   await bot.start();
@@ -187,6 +210,8 @@ async function main() {
     console.log('\nShutting down gracefully...');
 
     healthServer.close();
+    telegram.stop();
+    await telegram.sendAlert('<b>BOT STOPPED</b>\nThe copy-trading bot has shut down.');
 
     // Stop bot (handles detector, inflight trades, and builder cleanup)
     await bot.stop();
