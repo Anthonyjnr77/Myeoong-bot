@@ -24,7 +24,7 @@ services:
       - key: MODE
         value: simulate
       - key: MIN_BALANCE
-        value: "0.1"
+        value: "0"
       - key: PUMPFUN_BUY_AMOUNT
         value: "0.002"
       - key: PUMPSWAP_BUY_AMOUNT

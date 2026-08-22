@@ -177,8 +177,8 @@ class ConfigValidator {
   }
 
   private static validateTradingParams(trading: any): void {
-    if (trading.minBalance <= 0) {
-      throw new Error('Minimum balance must be positive');
+    if (trading.minBalance < 0) {
+      throw new Error('Minimum balance cannot be negative');
     }
 
     if (trading.minTradeAmountSol <= 0) {
@@ -263,8 +263,8 @@ class ConfigValidator {
     }
 
     // Validate numeric values
-    if (isNaN(minBalance) || minBalance <= 0) {
-      throw new Error('MIN_BALANCE must be a positive number');
+    if (isNaN(minBalance) || minBalance < 0) {
+      throw new Error('MIN_BALANCE must be zero or a positive number');
     }
     if (isNaN(minTradeAmount) || minTradeAmount <= 0) {
       throw new Error('MIN_TRADE_AMOUNT must be a positive number');

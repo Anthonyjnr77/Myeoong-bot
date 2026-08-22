@@ -108,7 +108,7 @@ async function validateStartup(): Promise<void> {
     process.exit(1);
   }
 
-  // Test bot wallet balance
+  // Check bot wallet balance only when live transactions will be submitted.
   if (!appConfig.wallet?.privateKey) {
     console.error('✗ Bot wallet not configured');
     console.error('  Solution: Set BOT_WALLET_PRIVATE_KEY in .env');
@@ -119,12 +119,14 @@ async function validateStartup(): Promise<void> {
   const balance = await connection.getBalance(botKeypair.publicKey);
   const balanceSol = balance / 1e9;
 
-  const minBalance = appConfig.trading?.minBalance || 0.1;
-  if (balanceSol < minBalance) {
-    console.error(`✗ Insufficient bot wallet balance: ${balanceSol.toFixed(4)} SOL`);
-    console.error(`  Minimum required: ${minBalance} SOL`);
-    console.error('  Solution: Fund bot wallet');
-    process.exit(1);
+  if (appConfig.mode === 'live') {
+    const minBalance = appConfig.trading?.minBalance || 0.1;
+    if (balanceSol < minBalance) {
+      console.error(`✗ Insufficient bot wallet balance: ${balanceSol.toFixed(4)} SOL`);
+      console.error(`  Minimum required: ${minBalance} SOL`);
+      console.error('  Solution: Fund bot wallet');
+      process.exit(1);
+    }
   }
 }
 
