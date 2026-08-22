@@ -3,8 +3,8 @@ services:
     name: myeoong-copytrader
     runtime: node
     plan: free
-    buildCommand: corepack enable && pnpm install --frozen-lockfile
-    startCommand: pnpm bot --mode=simulate
+    buildCommand: npm install --no-audit --no-fund
+    startCommand: npm run bot -- --mode=live
     healthCheckPath: /
     envVars:
       - key: HELIUS_API_KEY
@@ -21,8 +21,22 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      - key: TELEGRAM_EXTENDED
+        value: "true"
+      - key: TELEGRAM_WEBHOOK_MODE
+        value: "false"
+      - key: TELEGRAM_COOLDOWN_MS
+        value: "5000"
+      - key: TELEGRAM_COOLDOWN_NOTIFY_MS
+        value: "60000"
+      - key: TELEGRAM_POLL_INTERVAL_MS
+        value: "30000"
+      - key: TELEGRAM_GETUPDATES_TIMEOUT_SEC
+        value: "30"
+      - key: TELEGRAM_POLL_BACKOFF_MS
+        value: "300000"
       - key: MODE
-        value: simulate
+        value: live
       - key: MIN_BALANCE
         value: "0"
       - key: PUMPFUN_BUY_AMOUNT
