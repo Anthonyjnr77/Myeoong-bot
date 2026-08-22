@@ -108,25 +108,10 @@ async function validateStartup(): Promise<void> {
     process.exit(1);
   }
 
-  // Check bot wallet balance only when live transactions will be submitted.
   if (!appConfig.wallet?.privateKey) {
     console.error('✗ Bot wallet not configured');
     console.error('  Solution: Set BOT_WALLET_PRIVATE_KEY in .env');
     process.exit(1);
-  }
-
-  const botKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.wallet.privateKey));
-  const balance = await connection.getBalance(botKeypair.publicKey);
-  const balanceSol = balance / 1e9;
-
-  if (appConfig.mode === 'live') {
-    const minBalance = appConfig.trading?.minBalance || 0.1;
-    if (balanceSol < minBalance) {
-      console.error(`✗ Insufficient bot wallet balance: ${balanceSol.toFixed(4)} SOL`);
-      console.error(`  Minimum required: ${minBalance} SOL`);
-      console.error('  Solution: Fund bot wallet');
-      process.exit(1);
-    }
   }
 }
 
@@ -147,7 +132,6 @@ async function main() {
   // Initialize components
   const connection = new Connection(appConfig.rpc.endpoint, { commitment: appConfig.rpc.commitment });
   const botKeypair = Keypair.fromSecretKey(bs58.decode(appConfig.wallet.privateKey));
-  const botBalance = (await connection.getBalance(botKeypair.publicKey)) / 1e9;
 
   // Initialize bot
   const bot = new CopytradingBot({
@@ -176,7 +160,7 @@ async function main() {
   console.log();
   console.log(`Mode:        ${mode.toUpperCase()}`);
   console.log(`Wallets:     ${watchWallets.map(w => `${w.slice(0, 4)}...${w.slice(-4)}`).join(', ')} (${watchWallets.length} total)`);
-  console.log(`Bot Wallet:  ${botKeypair.publicKey.toBase58().slice(0, 4)}...${botKeypair.publicKey.toBase58().slice(-4)} (${botBalance.toFixed(2)} SOL)`);
+  console.log(`Bot Wallet:  ${botKeypair.publicKey.toBase58().slice(0, 4)}...${botKeypair.publicKey.toBase58().slice(-4)}`);
   console.log(`Protocols:   pump.fun ✓  PumpSwap ✓`);
   console.log(`Log File:    ./logs/bot-${sessionId}.log`);
   console.log();
