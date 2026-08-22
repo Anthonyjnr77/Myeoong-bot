@@ -1,74 +1,49 @@
 import { BotEvent, BotEventHandler } from '../types';
+import { sendTelegramAlert } from '../../utils/telegram';
 
 export class TelegramHandler implements BotEventHandler {
-  private readonly token: string;
-  private readonly chatId: string;
-
-  constructor() {
-    this.token = process.env.TELEGRAM_BOT_TOKEN?.trim() || '';
-    this.chatId = process.env.TELEGRAM_CHAT_ID?.trim() || '';
-  }
-
   handle(event: BotEvent): void {
-    if (!this.token || !this.chatId) {
-      return;
+    const message = this.format(event);
+    if (message) {
+      void sendTelegramAlert(message);
     }
-
-    void this.send(this.format(event)).catch(() => {
-      // Notification failures must not affect trade processing.
-    });
   }
 
   private format(event: BotEvent): string | null {
     switch (event.type) {
       case 'detected':
         return [
-          `🔎 ${event.protocol === 'pumpfun' ? 'pump.fun' : 'PumpSwap'} trade detected`,
-          `Type: ${event.parsed.type}`,
-          `Mint: ${event.parsed.mint}`,
-          `Source: ${event.parsed.user}`,
-          `Signature: ${event.parsed.signature}`
+          `<b>${event.protocol === 'pumpfun' ? 'PUMP.FUN' : 'PUMPSWAP'} TRADE DETECTED</b>`,
+          `Type: <code>${event.parsed.type}</code>`,
+          `Mint: <code>${this.escapeHtml(event.parsed.mint)}</code>`,
+          `Source: <code>${this.escapeHtml(event.parsed.user)}</code>`,
+          `Signature: <code>${this.escapeHtml(event.parsed.signature)}</code>`
         ].join('\n');
-      case 'executionSuccess':
+      case 'executionSuccess': {
         const successMessage = [
-          `✅ ${event.parsed.type} ${event.parsed.protocol === 'PUMP_FUN' ? 'pump.fun' : 'PumpSwap'}`,
-          `Mode: ${process.env.MODE === 'simulate' ? 'SIMULATE' : 'LIVE'}`,
-          `Mint: ${event.parsed.mint}`,
-          `Copy signature: ${event.signature}`
+          `<b>${event.parsed.type} ${event.parsed.protocol === 'PUMP_FUN' ? 'PUMP.FUN' : 'PUMPSWAP'}</b>`,
+          `Mode: <code>${process.env.MODE === 'simulate' ? 'SIMULATE' : 'LIVE'}</code>`,
+          `Mint: <code>${this.escapeHtml(event.parsed.mint)}</code>`,
+          `Copy signature: <code>${this.escapeHtml(event.signature)}</code>`
         ];
         if (process.env.MODE !== 'simulate') {
-          successMessage.push(`Explorer: https://explorer.solana.com/tx/${event.signature}?cluster=devnet`);
+          successMessage.push(`Explorer: https://explorer.solana.com/tx/${encodeURIComponent(event.signature)}?cluster=devnet`);
         }
         return successMessage.join('\n');
+      }
       case 'buildFailed':
       case 'executionFailed':
         return [
-          `❌ Trade ${event.type === 'buildFailed' ? 'build' : 'execution'} failed`,
-          `Mint: ${event.parsed.mint || 'unknown'}`,
-          `Error: ${event.error}`
+          `<b>TRADE ${event.type === 'buildFailed' ? 'BUILD' : 'EXECUTION'} FAILED</b>`,
+          `Mint: <code>${this.escapeHtml(event.parsed.mint || 'unknown')}</code>`,
+          `Error: ${this.escapeHtml(event.error)}`
         ].join('\n');
       default:
         return null;
     }
   }
 
-  private async send(text: string | null): Promise<void> {
-    if (!text) {
-      return;
-    }
-
-    const response = await fetch(`https://api.telegram.org/bot${this.token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: this.chatId,
-        text,
-        disable_web_page_preview: true
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Telegram request failed with status ${response.status}`);
-    }
+  private escapeHtml(value: string): string {
+    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 }

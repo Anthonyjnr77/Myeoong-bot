@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: myeoong-copytrader
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && pnpm install --frozen-lockfile
+    startCommand: pnpm bot --mode=simulate
+    healthCheckPath: /
+    envVars:
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: HELIUS_RPC_ENDPOINT
+        sync: false
+      - key: LASERSTREAM_ENDPOINT
+        sync: false
+      - key: BOT_WALLET_PRIVATE_KEY
+        sync: false
+      - key: WATCH_WALLETS
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: MODE
+        value: simulate
+      - key: MIN_BALANCE
+        value: "0.1"
+      - key: PUMPFUN_BUY_AMOUNT
+        value: "0.002"
+      - key: PUMPSWAP_BUY_AMOUNT
+        value: "0.002"
+      - key: MIN_TRADE_AMOUNT
+        value: "0.001"
+      - key: PUMPFUN_SLIPPAGE_BPS
+        value: "500"
+      - key: PUMPSWAP_SLIPPAGE_BPS
+        value: "1000"
+      - key: RPC_COMMITMENT
+        value: processed
+      - key: PUMPFUN_ENABLED
+        value: "true"
+      - key: PUMPSWAP_ENABLED
+        value: "true"

@@ -17,10 +17,12 @@
     "bs58": "^6.0.0",
     "dotenv": "^17.2.2",
     "helius-laserstream": "^0.2.0",
+    "node-fetch": "^2.7.0",
     "pumpdotfun-repumped-sdk": "^1.4.2"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/node-fetch": "^2.6.12",
     "tsx": "^4.20.6",
     "typescript": "^5"
   }

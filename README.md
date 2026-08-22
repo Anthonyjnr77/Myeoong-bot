@@ -57,6 +57,17 @@ sol-copytrader/
 
 See `.env.example` for a complete configuration template.
 
+### Telegram Notifications
+
+Set these variables to receive alerts for detected trades, simulated/live results, and failures:
+
+```env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+```
+
+Notifications use the Telegram Bot API directly. Missing Telegram variables disable alerts without stopping the bot.
+
 
 ## 3. Quick Start
 ```bash

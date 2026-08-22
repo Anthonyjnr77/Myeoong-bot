@@ -13,6 +13,7 @@ import { TelegramHandler } from './bot/handlers/TelegramHandler';
 import bs58 from 'bs58';
 import fs from 'fs';
 import path from 'path';
+import { createServer, Server } from 'http';
 
 // Parse CLI arguments
 const args = process.argv.slice(2);
@@ -180,6 +181,13 @@ async function main() {
   console.log('═'.repeat(60));
   console.log('Listening for trades...\n');
 
+  const healthServer: Server = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/plain' });
+    response.end('copytrader is running\n');
+  });
+  const port = Number(process.env.PORT || 10000);
+  healthServer.listen(port, '0.0.0.0');
+
   // Start bot
   await bot.start();
 
@@ -191,6 +199,8 @@ async function main() {
     isShuttingDown = true;
 
     console.log('\nShutting down gracefully...');
+
+    healthServer.close();
 
     // Stop bot (handles detector, inflight trades, and builder cleanup)
     await bot.stop();
