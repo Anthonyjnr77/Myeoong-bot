@@ -3,7 +3,7 @@ services:
     name: myeoong-copytrader
     runtime: node
     plan: free
-    buildCommand: npm install --no-audit --no-fund
+    buildCommand: npm install --package-lock=false --no-audit --no-fund
     startCommand: npm run bot -- --mode=live
     healthCheckPath: /
     envVars:
