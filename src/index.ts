@@ -9,6 +9,7 @@ import { CopytradingBot } from './bot/CopytradingBot';
 import { LoggingHandler } from './bot/handlers/LoggingHandler';
 import { MetricsHandler } from './bot/handlers/MetricsHandler';
 import { CircuitBreakerHandler } from './bot/handlers/CircuitBreakerHandler';
+import { TelegramHandler } from './bot/handlers/TelegramHandler';
 import bs58 from 'bs58';
 import fs from 'fs';
 import path from 'path';
@@ -155,6 +156,7 @@ async function main() {
   bot.addHandler(new LoggingHandler(logger));
   bot.addHandler(new MetricsHandler(metrics));
   bot.addHandler(new CircuitBreakerHandler(5, () => shutdown()));
+  bot.addHandler(new TelegramHandler());
 
   // Initialize bot
   await bot.initialize();
