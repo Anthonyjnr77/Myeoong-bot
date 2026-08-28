@@ -11,6 +11,9 @@ export function depositToken0(
   if (slippage < 0 || slippage > 100) {
     throw new Error("Slippage must be between 0 and 100 (0% to 100%)");
   }
+  if (token0Reserve.isZero() || totalLpTokens.isZero()) {
+    throw new Error("Token reserve and total LP tokens cannot be zero.");
+  }
 
   // Calculate the corresponding output amount based on the pool's reserves
   const token1 = token0.mul(token1Reserve).div(token0Reserve);
@@ -42,6 +45,9 @@ export function depositLpToken(
   quoteReserve: BN,
   totalLpTokens: BN,
 ): DepositLpTokenResult {
+  if (slippage < 0 || slippage > 100) {
+    throw new Error("Slippage must be between 0 and 100 (0% to 100%)");
+  }
   if (totalLpTokens.isZero()) {
     throw new Error("Division by zero: totalLpTokens cannot be zero");
   }

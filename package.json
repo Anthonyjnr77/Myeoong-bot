@@ -2,6 +2,7 @@
   "name": "sol-copytrader",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@11.22.0",
   "scripts": {
     "bot": "tsx src/index.ts",
     "demo": "tsx test/demo.ts",
@@ -12,16 +13,23 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
+    "@coral-xyz/borsh": "^0.32.1",
     "@pump-fun/pump-swap-sdk": "^1.7.9",
+    "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.1",
     "bs58": "^6.0.0",
     "dotenv": "^17.2.2",
+    "express": "^4.21.2",
     "helius-laserstream": "^0.2.0",
+    "jito-ts": "^4.2.1",
     "node-fetch": "^2.7.0",
     "pumpdotfun-repumped-sdk": "^1.4.2"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/express": "^5.0.1",
+    "@types/bn.js": "^5.2.0",
     "@types/node-fetch": "^2.6.12",
     "tsx": "^4.20.6",
     "typescript": "^5"

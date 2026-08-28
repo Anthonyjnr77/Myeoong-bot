@@ -73,6 +73,9 @@ export function calculateFeeTier({
   feeTiers: FeeTier[];
   marketCap: BN;
 }): Fees {
+  if (feeTiers.length === 0) {
+    throw new Error("Fee configuration must contain at least one fee tier.");
+  }
   const firstTier = feeTiers[0];
 
   if (marketCap.lt(firstTier.marketCapLamportsThreshold)) {

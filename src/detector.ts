@@ -3,6 +3,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { appConfig, PUMP_FUN_CONSTANTS, PUMP_SWAP_CONSTANTS } from './config/config';
 import bs58 from 'bs58';
 import { logError } from './utils/errors';
+import type { SubscribeUpdate } from 'helius-laserstream';
 
 export type Protocol = 'PUMP_FUN' | 'PUMP_SWAP' | 'UNKNOWN';
 
@@ -100,19 +101,24 @@ export class Detector {
 
     try {
       const transaction = await this.connection.getTransaction(signature, {
-        commitment: appConfig.rpc.commitment,
+        commitment: appConfig.rpc.commitment === 'processed'
+          ? 'confirmed'
+          : appConfig.rpc.commitment,
         maxSupportedTransactionVersion: 0
       });
 
-      if (!transaction || transaction.meta?.err) {
+      if (!transaction || !transaction.meta || transaction.meta.err) {
         return;
       }
 
-      const accountKeys = transaction.transaction.message.accountKeys.map(key => key.toBase58());
-      const instructions = transaction.transaction.message.instructions.map(instruction => ({
+      const message = transaction.transaction.message;
+      const accountKeys = message.getAccountKeys({
+        accountKeysFromLookups: transaction.meta.loadedAddresses
+      }).keySegments().flat().map(key => key.toBase58());
+      const instructions = message.compiledInstructions.map(instruction => ({
         programIdIndex: instruction.programIdIndex,
-        accounts: Array.from(instruction.accounts),
-        data: bs58.decode(instruction.data)
+        accounts: Array.from(instruction.accountKeyIndexes),
+        data: bs58.encode(instruction.data)
       }));
       const innerInstructions = transaction.meta.innerInstructions?.flatMap(group =>
         group.instructions.map(instruction => ({

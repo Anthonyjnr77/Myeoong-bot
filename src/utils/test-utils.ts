@@ -60,7 +60,7 @@ export async function getTransactionSlot(
         maxSupportedTransactionVersion: 0
       });
 
-      if (tx?.slot) {
+      if (tx !== null) {
         return tx.slot;
       }
     } catch {}

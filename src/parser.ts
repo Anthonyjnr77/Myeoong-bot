@@ -67,7 +67,12 @@ export class TradeParser {
 
       if (!isBuy && !isSell) continue;
 
-      const accountIndices = Array.from(instruction.accounts);
+      const accountIndices = Array.from(instruction.accounts, (index: unknown) => {
+        if (typeof index !== 'number') {
+          throw new Error('Instruction account index is not numeric');
+        }
+        return index;
+      });
       const targetAccounts = PUMP_FUN_CONSTANTS.TARGET_ACCOUNTS[isBuy ? 'BUY' : 'SELL'];
 
       const mint = transaction.accountKeys[accountIndices[targetAccounts[0].index]];
@@ -123,7 +128,12 @@ export class TradeParser {
 
       if (!isBuy && !isSell) continue;
 
-      const accountIndices = Array.from(instruction.accounts);
+      const accountIndices = Array.from(instruction.accounts, (index: unknown) => {
+        if (typeof index !== 'number') {
+          throw new Error('Instruction account index is not numeric');
+        }
+        return index;
+      });
       
       const pool = transaction.accountKeys[accountIndices[0]];
       const user = transaction.accountKeys[accountIndices[1]];

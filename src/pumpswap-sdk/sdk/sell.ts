@@ -33,6 +33,9 @@ export function sellBaseInput({
   creator: PublicKey;
   feeConfig: FeeConfig | null;
 }): SellBaseInputResult {
+  if (!Number.isFinite(slippage) || slippage < 0 || slippage > 100) {
+    throw new Error("Slippage must be between 0 and 100 percent.");
+  }
   // -----------------------------------------
   // 1) Basic validations
   // -----------------------------------------
@@ -117,6 +120,9 @@ function calculateQuoteAmountOut(
     .add(coinCreatorFeeBasisPoints);
   // Calculate the denominator
   const denominator = MAX_FEE_BASIS_POINTS.sub(totalFeeBasisPoints);
+  if (denominator.isZero() || denominator.isNeg()) {
+    throw new Error("Total fees must be less than 100 percent.");
+  }
   // Calculate the quote_amount_out
   return ceilDiv(userQuoteAmountOut.mul(MAX_FEE_BASIS_POINTS), denominator);
 }
@@ -144,6 +150,9 @@ export function sellQuoteInput({
   creator: PublicKey;
   feeConfig: FeeConfig | null;
 }): SellQuoteInputResult {
+  if (!Number.isFinite(slippage) || slippage < 0 || slippage > 100) {
+    throw new Error("Slippage must be between 0 and 100 percent.");
+  }
   // -----------------------------------------
   // 1) Basic validations
   // -----------------------------------------

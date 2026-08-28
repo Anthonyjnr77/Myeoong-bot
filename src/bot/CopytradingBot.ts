@@ -26,6 +26,7 @@ export class CopytradingBot {
   private handlers: BotEventHandler[] = [];
   private inflightTrades: number = 0;
   private isRunning: boolean = false;
+  private isPaused: boolean = false;
 
   constructor(config: BotConfig) {
     this.config = config;
@@ -106,6 +107,14 @@ export class CopytradingBot {
     return this.inflightTrades;
   }
 
+  getPaused(): boolean {
+    return this.isPaused;
+  }
+
+  setPaused(paused: boolean): void {
+    this.isPaused = paused;
+  }
+
   // Core trade processing logic (extracted from index.ts lines ~140-220)
   private async processTrade(tx: DetectedTransaction): Promise<void> {
     this.inflightTrades++;
@@ -150,6 +159,11 @@ export class CopytradingBot {
       }
 
       const parsed = parseResult.data!;
+
+      if (this.isPaused && parsed.type === 'BUY') {
+        this.emit({ type: 'filtered', reason: 'bot_paused' } as FilteredEvent);
+        return;
+      }
 
       // Record detection
       const protocol = parsed.protocol === 'PUMP_FUN' ? 'pumpfun' : 'pumpswap';

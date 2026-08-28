@@ -181,7 +181,7 @@ async function validateRPCConnection(): Promise<ValidationResult> {
 
     const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT);
     const start = Date.now();
-    await connection.getSlot();
+    await connection.getLatestBlockhash();
     const latency = Date.now() - start;
 
     return {
@@ -202,6 +202,8 @@ async function validateLaserstreamConnection(): Promise<ValidationResult> {
     if (!process.env.LASERSTREAM_ENDPOINT || !process.env.HELIUS_API_KEY) {
       throw new Error('Laserstream configuration not set');
     }
+
+    const { CommitmentLevel, subscribe } = await import('helius-laserstream');
 
     return await new Promise<ValidationResult>((resolve) => {
       let resolved = false;
@@ -230,7 +232,7 @@ async function validateLaserstreamConnection(): Promise<ValidationResult> {
         }
       }, 5000);
 
-      subscribe(
+      void subscribe(
         {
           apiKey: process.env.HELIUS_API_KEY!,
           endpoint: process.env.LASERSTREAM_ENDPOINT!
@@ -243,11 +245,11 @@ async function validateLaserstreamConnection(): Promise<ValidationResult> {
           blocks: {},
           blocksMeta: {},
           entry: {},
-          accountsDataSlice: []
+          accountsDataSlice: [],
+          commitment: CommitmentLevel.CONFIRMED
         },
-        () => {}, // Empty data handler
-        (error: any) => {
-          // Error callback
+        () => {},
+        (error: Error) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
@@ -274,22 +276,64 @@ async function validateLaserstreamConnection(): Promise<ValidationResult> {
               message: 'Laserstream connection successful'
             });
           }
-      async function validateWebSocketConnection(): Promise<ValidationResult> {
-        try {
-          const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT!, { commitment: 'processed' });
-          const subscriptionId = await connection.onLogs(SystemProgram.programId, () => {}, 'processed');
-          await connection.removeOnLogsListener(subscriptionId);
-          return { passed: true, message: 'RPC WebSocket connection successful' };
-        } catch (error) {
-          return {
+        }, 2000);
+      }).catch((error: unknown) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          cleanup();
+          resolve({
             passed: false,
-            message: `RPC WebSocket connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            solution: 'Check HELIUS_RPC_ENDPOINT and HELIUS_API_KEY in .env'
-          };
+            message: `Laserstream connection failed: ${error instanceof Error ? error.message : String(error)}`,
+            solution: 'Check HELIUS_API_KEY is valid and has Laserstream access'
+          });
         }
-      }
+      });
+    });
+  } catch (error) {
+    return {
+      passed: false,
+      message: `Laserstream validation failed: ${error instanceof Error ? error.message : String(error)}`,
+      solution: 'Check LASERSTREAM_ENDPOINT and HELIUS_API_KEY'
+    };
   }
+}
 
+async function validateWebSocketConnection(): Promise<ValidationResult> {
+  try {
+    if (!process.env.HELIUS_RPC_ENDPOINT) {
+      throw new Error('RPC endpoint not set');
+    }
+    const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT, { commitment: 'processed' });
+    const subscriptionId = await connection.onLogs(SystemProgram.programId, () => {}, 'processed');
+    await connection.removeOnLogsListener(subscriptionId);
+    return { passed: true, message: 'RPC WebSocket connection successful' };
+  } catch (error) {
+    return {
+      passed: false,
+      message: `RPC WebSocket connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      solution: 'Check HELIUS_RPC_ENDPOINT and HELIUS_API_KEY in .env'
+    };
+  }
+}
+
+async function validateWalletBalances(): Promise<ValidationResult[]> {
+  const results: ValidationResult[] = [];
+  try {
+    if (!process.env.HELIUS_RPC_ENDPOINT || !process.env.BOT_WALLET_PRIVATE_KEY) {
+      return [{ passed: false, message: 'Wallet balance check skipped: missing configuration', solution: 'Set HELIUS_RPC_ENDPOINT and BOT_WALLET_PRIVATE_KEY' }];
+    }
+    const connection = new Connection(process.env.HELIUS_RPC_ENDPOINT);
+    const wallet = Keypair.fromSecretKey(bs58.decode(process.env.BOT_WALLET_PRIVATE_KEY));
+    const balance = await connection.getBalance(wallet.publicKey);
+    results.push({ passed: true, message: `Bot wallet balance: ${(balance / 1_000_000_000).toFixed(4)} SOL` });
+  } catch (error) {
+    results.push({
+      passed: false,
+      message: `Wallet balance check failed: ${error instanceof Error ? error.message : String(error)}`,
+      solution: 'Check the bot private key and RPC endpoint'
+    });
+  }
   return results;
 }
 

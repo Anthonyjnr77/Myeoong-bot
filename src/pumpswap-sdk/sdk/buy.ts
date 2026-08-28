@@ -33,6 +33,9 @@ export function buyBaseInput({
   creator: PublicKey;
   feeConfig: FeeConfig | null;
 }): BuyBaseInputResult {
+  if (!Number.isFinite(slippage) || slippage < 0) {
+    throw new Error("Slippage must be a finite non-negative percentage.");
+  }
   // -----------------------------------------------------
   // 1) Basic validations
   // -----------------------------------------------------
@@ -130,6 +133,9 @@ export function buyQuoteInput({
   creator: PublicKey;
   feeConfig: FeeConfig | null;
 }): BuyQuoteInputResult {
+  if (!Number.isFinite(slippage) || slippage < 0) {
+    throw new Error("Slippage must be a finite non-negative percentage.");
+  }
   // -----------------------------------------------------
   // 1) Basic validations
   // -----------------------------------------------------

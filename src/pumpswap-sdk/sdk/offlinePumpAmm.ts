@@ -58,7 +58,7 @@ export const OFFLINE_PUMP_AMM_PROGRAM = getPumpAmmProgram(
 );
 
 export class PumpAmmSdk {
-  private readonly offlineProgram: Program<PumpAmm>;
+  public readonly offlineProgram: Program<PumpAmm>;
 
   constructor() {
     this.offlineProgram = OFFLINE_PUMP_AMM_PROGRAM;

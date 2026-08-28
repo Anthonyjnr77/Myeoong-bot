@@ -17,7 +17,7 @@ export function totalUnclaimedTokens(
     return result;
   }
 
-  let currentTimestampBn = new BN(currentTimestamp);
+  const currentTimestampBn = new BN(Math.floor(currentTimestamp));
 
   if (currentTimestampBn.lt(startTime)) {
     return result;
@@ -47,6 +47,10 @@ export function totalUnclaimedTokens(
     const lastUpdatedDayTokenSupply = totalTokenSupply[lastUpdatedIndex];
     const lastUpdatedDaySolVolume = solVolumes[lastUpdatedIndex];
 
+    if (!lastUpdatedDayTokenSupply || !lastUpdatedDaySolVolume) {
+      return result;
+    }
+
     if (lastUpdatedDaySolVolume.eqn(0)) {
       return result;
     }
@@ -74,7 +78,7 @@ export function currentDayTokens(
     return new BN(0);
   }
 
-  let currentTimestampBn = new BN(currentTimestamp);
+  const currentTimestampBn = new BN(Math.floor(currentTimestamp));
 
   if (currentTimestampBn.lt(startTime) || currentTimestampBn.gt(endTime)) {
     return new BN(0);
@@ -104,6 +108,10 @@ export function currentDayTokens(
 
   const currentDayTokenSupply = totalTokenSupply[currentDayIndex];
   const currentDaySolVolume = solVolumes[currentDayIndex];
+
+  if (!currentDayTokenSupply || !currentDaySolVolume) {
+    return new BN(0);
+  }
 
   if (currentDaySolVolume.eqn(0)) {
     return new BN(0);

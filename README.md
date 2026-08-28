@@ -68,6 +68,8 @@ TELEGRAM_CHAT_ID=your_telegram_chat_id
 
 Notifications use the Telegram Bot API directly. Missing Telegram variables disable alerts without stopping the bot.
 
+Telegram commands are authorized to the configured chat only. Set `TELEGRAM_WEBHOOK_MODE=false` to use long polling, or set it to `true` with `TELEGRAM_WEBHOOK_SECRET` and a public `TELEGRAM_WEBHOOK_URL`.
+
 
 ## 3. Quick Start
 ```bash

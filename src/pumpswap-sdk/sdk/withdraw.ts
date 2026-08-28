@@ -8,6 +8,9 @@ export function withdraw(
   quoteReserve: BN,
   totalLpTokens: BN,
 ): WithdrawResult {
+  if (slippage < 0 || slippage > 100) {
+    throw new Error("Slippage must be between 0 and 100 (0% to 100%).");
+  }
   if (lpAmount.isZero() || totalLpTokens.isZero()) {
     throw new Error("LP amount or total LP tokens cannot be zero.");
   }

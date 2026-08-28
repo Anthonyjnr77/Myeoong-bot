@@ -14,11 +14,18 @@ class AgentRegistry {
     new Map();
   /** Lazy-create & memoize */
   static get(key: HostKey): http.Agent {
-    if (!this.agents[key]) {
-      const config = this.config[key];
+    const existingAgent = this.agents[key];
+    if (existingAgent) {
+      return existingAgent;
+    }
+
+    const config = this.config.get(key);
+    if (!config) {
+      throw new Error(`Host key ${key} is not registered.`);
+    }
       const isHttps = config.port === 443;
 
-      this.agents[key] = isHttps
+      const agent = isHttps
         ? new https.Agent({
             keepAlive: true,
             keepAliveMsecs: 60_000,
@@ -31,9 +38,8 @@ class AgentRegistry {
             maxSockets: 6, // tune per host
             maxFreeSockets: 6,
           });
-      // wireAgentDebug(this.agents[key]!, key);
-    }
-    return this.agents[key]!;
+      this.agents[key] = agent;
+    return agent;
   }
 
   static registerInConfig(key: HostKey, region: Region) {
@@ -79,7 +85,11 @@ class AgentRegistry {
   }
 
   static target(key: HostKey) {
-    return this.config[key];
+    const target = this.config.get(key);
+    if (!target) {
+      throw new Error(`Host key ${key} is not registered.`);
+    }
+    return target;
   }
 
   static callUpstream(
