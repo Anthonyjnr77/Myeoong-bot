@@ -3,7 +3,7 @@ services:
     name: myeoong-copytrader
     runtime: node
     plan: free
-    buildCommand: corepack enable && corepack prepare pnpm@11.22.0 --activate && pnpm install --frozen-lockfile
+    buildCommand: npx --yes pnpm@11.22.0 install --frozen-lockfile
     startCommand: npm run bot -- --mode=live
     healthCheckPath: /
     envVars:
