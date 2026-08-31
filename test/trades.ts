@@ -43,7 +43,7 @@ const PATTERNS: Record<string, TradeStep[]> = {
   'buysell': [
     { type: 'buy' },
     { type: 'sell' }
-  ],
+  ],  
   'pump': [
     { type: 'buy', protocol: 'pumpfun' },
     { type: 'buy', protocol: 'pumpswap' },

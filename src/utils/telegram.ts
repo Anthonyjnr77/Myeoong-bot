@@ -74,6 +74,7 @@ export class TelegramBot {
   private updateOffset = 0;
   private pollingTimer?: NodeJS.Timeout;
   private pollingBackoffUntil = 0;
+  private pollingInFlight = false;
 
   constructor(options: TelegramBotOptions) {
     this.options = { extended: false, webhookMode: true, ...options };
@@ -94,12 +95,16 @@ export class TelegramBot {
       await this.setupWebhook();
     } else if (!this.options.webhookMode) {
       await this.deleteWebhook();
-      this.pollingTimer = setInterval(() => { void this.poll().catch(error => console.error('Telegram polling error:', error)); }, this.pollIntervalMs);
-      void this.poll();
+      this.scheduleNextPoll(0);
     }
   }
 
-  stop(): void { if (this.pollingTimer) { clearInterval(this.pollingTimer); this.pollingTimer = undefined; } }
+  stop(): void {
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+      this.pollingTimer = undefined;
+    }
+  }
   async sendAlert(message: string): Promise<boolean> { return sendTelegramAlert(message); }
   async sendMessage(chatId: number | string, text: string): Promise<boolean> { return sendTelegramMessage(chatId, text); }
 
@@ -152,19 +157,46 @@ export class TelegramBot {
   }
 
   async poll(): Promise<void> {
-    if (!this.enabled || this.options.webhookMode || Date.now() < this.pollingBackoffUntil) return;
-    const result = await this.apiRequest('getUpdates', { offset: this.updateOffset, timeout: this.pollTimeoutSec });
-    if (!result.ok) {
-      if (result.status === 409) {
-        this.pollingBackoffUntil = Date.now() + this.pollBackoffMs;
-        console.error('Telegram polling conflict; backing off temporarily');
-      } else console.error(`Telegram polling failed (${result.status}): ${result.body}`);
+    if (!this.enabled || this.options.webhookMode || this.pollingInFlight) return;
+
+    const now = Date.now();
+    if (now < this.pollingBackoffUntil) {
+      this.scheduleNextPoll(Math.max(0, this.pollingBackoffUntil - now));
       return;
     }
-    for (const update of (result.data.result || []) as TelegramUpdate[]) {
-      await this.handleUpdate(update);
-      if (update.update_id !== undefined) this.updateOffset = update.update_id + 1;
+
+    this.pollingInFlight = true;
+    try {
+      const result = await this.apiRequest('getUpdates', { offset: this.updateOffset, timeout: this.pollTimeoutSec });
+      if (!result.ok) {
+        if (result.status === 409) {
+          this.pollingBackoffUntil = Date.now() + this.pollBackoffMs;
+          console.error('Telegram polling conflict; backing off temporarily');
+          this.scheduleNextPoll(this.pollBackoffMs);
+        } else {
+          console.error(`Telegram polling failed (${result.status}): ${result.body}`);
+          this.scheduleNextPoll(this.pollIntervalMs);
+        }
+        return;
+      }
+
+      for (const update of (result.data.result || []) as TelegramUpdate[]) {
+        await this.handleUpdate(update);
+        if (update.update_id !== undefined) this.updateOffset = update.update_id + 1;
+      }
+      this.scheduleNextPoll(this.pollIntervalMs);
+    } finally {
+      this.pollingInFlight = false;
     }
+  }
+
+  private scheduleNextPoll(delayMs: number): void {
+    if (this.options.webhookMode) return;
+    if (this.pollingTimer) clearTimeout(this.pollingTimer);
+    this.pollingTimer = setTimeout(() => {
+      this.pollingTimer = undefined;
+      void this.poll().catch(error => console.error('Telegram polling error:', error));
+    }, delayMs);
   }
 
   private async apiCall(method: string, parameters: Record<string, unknown>): Promise<boolean> {
