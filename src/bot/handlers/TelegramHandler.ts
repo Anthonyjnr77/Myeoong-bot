@@ -12,9 +12,10 @@ export class TelegramHandler implements BotEventHandler {
   private format(event: BotEvent): string | null {
     switch (event.type) {
       case 'detected':
+        if (event.parsed.type !== 'BUY') return null;
         return [
-          `<b>${event.protocol === 'pumpfun' ? 'PUMP.FUN' : 'PUMPSWAP'} TRADE DETECTED</b>`,
-          `Type: <code>${event.parsed.type}</code>`,
+          `<b>BOT ACTIVE — TRACKED WALLET BUY DETECTED</b>`,
+          `<b>${event.protocol === 'pumpfun' ? 'PUMP.FUN' : 'PUMPSWAP'} BUY</b>`,
           `Mint: <code>${this.escapeHtml(event.parsed.mint)}</code>`,
           `Source: <code>${this.escapeHtml(event.parsed.user)}</code>`,
           `Signature: <code>${this.escapeHtml(event.parsed.signature)}</code>`
