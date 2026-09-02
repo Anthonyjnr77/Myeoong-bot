@@ -184,12 +184,15 @@ async function main() {
     callbacks: {
       getPaused: () => bot.getPaused(),
       setPaused: paused => bot.setPaused(paused),
-      getStatus: () => ({
-        openPositions: 0,
-        balance: 'unavailable',
-        channels: watchWallets.length,
-        primaryServiceConnected: true
-      }),
+      getStatus: async () => {
+        const balanceLamports = await connection.getBalance(botKeypair.publicKey, appConfig.rpc.commitment);
+        return {
+          openPositions: 0,
+          balance: (balanceLamports / 1_000_000_000).toFixed(4),
+          channels: watchWallets.length,
+          primaryServiceConnected: true
+        };
+      },
       getStats: () => metrics.getStats ? JSON.stringify(metrics.getStats()) : 'Stats unavailable',
       getSettings: () => `Mode: ${mode}\nWallets: ${watchWallets.length}\nProtocols: pump.fun, PumpSwap`,
     }

@@ -7,7 +7,7 @@ const telegramAgent = new https.Agent({ keepAlive: true, maxSockets: 16, timeout
 export interface TelegramBotCallbacks {
   getPaused: () => boolean;
   setPaused: (paused: boolean) => void;
-  getStatus: () => { openPositions: number; balance: string; channels: number; primaryServiceConnected: boolean };
+  getStatus: () => { openPositions: number; balance: string; channels: number; primaryServiceConnected: boolean } | Promise<{ openPositions: number; balance: string; channels: number; primaryServiceConnected: boolean }>;
   getPositions?: () => string | Promise<string>;
   getStats?: () => string | Promise<string>;
   getHistory?: () => string | Promise<string>;
@@ -147,7 +147,7 @@ export class TelegramBot {
       this.options.callbacks.setPaused(false);
       reply = '▶ <b>Bot resumed.</b>\nNew buys re-enabled.';
     } else if (command === '/status') {
-      const status = this.options.callbacks.getStatus();
+      const status = await this.options.callbacks.getStatus();
       reply = `<b>STATUS</b>\nPaused: ${this.options.callbacks.getPaused() ? 'yes' : 'no'}\nOpen positions: ${status.openPositions}\nWallet: ${this.escapeHtml(status.balance)} SOL\nWS channels: ${status.channels}\nPrimary service: ${status.primaryServiceConnected ? '✅ connected' : '❌ disconnected'}`;
     } else if (this.options.extended) {
       const provider = command === '/positions' ? this.options.callbacks.getPositions : command === '/stats' ? this.options.callbacks.getStats : command === '/history' ? this.options.callbacks.getHistory : command === '/settings' ? this.options.callbacks.getSettings : undefined;
